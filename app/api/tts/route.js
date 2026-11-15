@@ -1,87 +1,78 @@
 import { NextResponse } from 'next/server';
 
-// Bộ chuẩn hóa nhanh các đơn vị đo lường và từ viết tắt nông nghiệp
-function normalizeVietnameseFast(text) {
+// Hàm chuyển đổi đơn vị kỹ thuật nông nghiệp trực tiếp, giữ nguyên 100% câu chữ bài viết
+function normalizeVietnameseText(text) {
   return text
+    .replace(/<[^>]*>/g, ' ') // Xóa thẻ HTML
     .replace(/(\d+)\s*-\s*(\d+)/g, '$1 đến $2')
-    .replace(/đ\/kg/gi, 'đồng một ki lô gam')
-    .replace(/đ\/con/gi, 'đồng một con')
-    .replace(/đ\/cây/gi, 'đồng một cây')
-    .replace(/đ\/lít/gi, 'đồng một lít')
+    .replace(/đ\/kg/gi, 'đồng trên một ki-lô-gam')
+    .replace(/đ\/con/gi, 'đồng trên một con')
+    .replace(/đ\/tấn/gi, 'đồng trên một tấn')
+    .replace(/VNĐ/gi, 'việt nam đồng')
     .replace(/(\d+)\s*°C/gi, '$1 độ xê')
-    .replace(/(\d+)\s*m²/gi, '$1 mét vuông')
-    .replace(/(\d+)\s*m³/gi, '$1 mét khối')
-    .replace(/\b(\d+)\s*kg\b/gi, '$1 ki lô gam')
-    .replace(/\b(\d+)\s*ha\b/gi, '$1 héc ta')
-    .replace(/\b(\d+)\s*cm\b/gi, '$1 xen ti mét')
-    .replace(/\b(\d+)\s*g\b/gi, '$1 gam')
+    .replace(/(\d+)\s*ha\b/gi, '$1 héc-ta')
+    .replace(/(\d+)\s*kg\b/gi, '$1 ki-lô-gam')
+    .replace(/(\d+)\s*g\b/gi, '$1 gam')
+    .replace(/(\d+)\s*ml\b/gi, '$1 mi-li-lít')
+    .replace(/(\d+)\s*cm\b/gi, '$1 xen-ti-mét')
+    .replace(/(\d+)\s*m2\b/gi, '$1 mét vuông')
     .replace(/(\d+)\s*%/g, '$1 phần trăm')
-    .replace(/\bHTX\b/g, 'hợp tác xã')
-    .replace(/\bKNQG\b/g, 'khuyến nông quốc gia')
-    .replace(/\bNLN\b/g, 'nông lâm nghiệp')
-    .replace(/\bNN&MT\b/g, 'nông nghiệp và môi trường')
-    .replace(/\bNPK\b/g, 'Nờ Pê Ka')
-    .replace(/\bSĐT\b/g, 'số điện thoại')
-    .replace(/\bVD:/gi, 'ví dụ:')
-    .replace(/\//g, ' trên ');
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-// Dùng Gemini AI chuyển đổi đoạn văn thành lời đọc tự nhiên như phát thanh viên
-async function smartRewriteForSpeech(text) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return normalizeVietnameseFast(text);
-
+export async function POST(req) {
   try {
-    const prompt = `Bạn là phát thanh viên đài truyền hình. Hãy chuyển đổi đoạn văn bản tiếng Việt dưới đây thành văn bản thuần túy để đọc thành tiếng (Text-to-Speech) sao cho tự nhiên nhất:
-- Chuyển toàn bộ ký hiệu, đơn vị đo lường, tiền tệ, từ viết tắt thành chữ đọc tiếng Việt chuẩn (ví dụ: "đ/kg" -> "đồng một ki lô gam", "15°C" -> "mười lăm độ xê", "100m²" -> "một trăm mét vuông", "1,5 - 1,8m" -> "một phẩy năm đến một phẩy tám mét", "HTX" -> "hợp tác xã", "NPK" -> "nờ pê ka").
-- Giữ nguyên ý nghĩa, không thêm bớt nội dung, không dùng ký hiệu đặc biệt.
+    const { text } = await req.json();
+    if (!text) {
+      return NextResponse.json({ error: 'Thiếu nội dung văn bản' }, { status: 400 });
+    }
 
-Đoạn văn gốc:
-"${text}"`;
+    const cleanText = normalizeVietnameseText(text);
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
+    // Chia văn bản thành các câu/đoạn nhỏ dưới 180 ký tự để không bao giờ bị cắt ngang
+    const rawSentences = cleanText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleanText];
+    const chunks = [];
+    let currentChunk = '';
+
+    for (const sentence of rawSentences) {
+      const s = sentence.trim();
+      if (!s) continue;
+      if ((currentChunk + ' ' + s).trim().length <= 180) {
+        currentChunk = (currentChunk + ' ' + s).trim();
+      } else {
+        if (currentChunk) chunks.push(currentChunk);
+        // Nếu 1 câu đơn lẻ dài hơn 180 ký tự thì cắt theo dấu phẩy hoặc khoảng trắng
+        if (s.length > 180) {
+          const words = s.split(' ');
+          let temp = '';
+          for (const w of words) {
+            if ((temp + ' ' + w).trim().length <= 180) {
+              temp = (temp + ' ' + w).trim();
+            } else {
+              chunks.push(temp);
+              temp = w;
+            }
+          }
+          if (temp) currentChunk = temp;
+        } else {
+          currentChunk = s;
+        }
       }
+    }
+    if (currentChunk) chunks.push(currentChunk);
+
+    // Tạo danh sách URL âm thanh Google TTS cho toàn bộ các đoạn của bài viết
+    const audioUrls = chunks.map(
+      (chunk) =>
+        `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(
+          chunk
+        )}&tl=vi&client=tw-ob`
     );
 
-    if (res.ok) {
-      const data = await res.json();
-      const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-      if (aiText) return aiText;
-    }
-  } catch {
-    // Nếu AI bận thì tự lùi về bộ quy tắc chuẩn hóa nhanh
+    return NextResponse.json({ audioUrls, totalChunks: chunks.length });
+  } catch (error) {
+    console.error('Lỗi TTS:', error);
+    return NextResponse.json({ error: 'Không thể tạo âm thanh' }, { status: 500 });
   }
-
-  return normalizeVietnameseFast(text);
-}
-
-export async function GET(req) {
-  const { searchParams } = new URL(req.url);
-  const rawText = searchParams.get('q') || '';
-  if (!rawText) return new NextResponse('Missing text', { status: 400 });
-
-  // Nhờ AI dịch ngữ cảnh sang lời đọc tự nhiên trước khi tạo file âm thanh
-  const spokenText = await smartRewriteForSpeech(rawText);
-
-  const ttsUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q=${encodeURIComponent(spokenText)}`;
-  const res = await fetch(ttsUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0' }
-  });
-
-  if (!res.ok) return new NextResponse('TTS Error', { status: 502 });
-
-  const audioBuffer = await res.arrayBuffer();
-  return new NextResponse(audioBuffer, {
-    headers: {
-      'Content-Type': 'audio/mpeg',
-      'Cache-Control': 'public, max-age=86400'
-    }
-  });
 }
