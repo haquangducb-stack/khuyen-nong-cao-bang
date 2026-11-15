@@ -22,7 +22,7 @@ const parsePrizes = (prizeStr) => {
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState('news');
   const [fontSize, setFontSize] = useState(16);
-  const [totalVisits, setTotalVisits] = useState(12480);
+  const [totalVisits, setTotalVisits] = useState(1);
 
   const [posts, setPosts] = useState([]);
   const [selectedPost, setSelectedPost] = useState(null);
@@ -73,9 +73,30 @@ export default function HomePage() {
   useEffect(() => {
     fetchPublicData();
     const timer = setInterval(() => setNow(new Date()), 1000);
-    const savedVisits = Number(localStorage.getItem('kncb_visits') || 12480) + 1;
-    localStorage.setItem('kncb_visits', savedVisits);
-    setTotalVisits(savedVisits);
+
+    // Đếm lượt truy cập thực tế cộng dồn trên Supabase
+    const updateRealVisits = async () => {
+      try {
+        const { data } = await supabase
+          .from('site_stats')
+          .select('visits')
+          .eq('id', 'home')
+          .single();
+
+        if (data) {
+          const nextCount = Number(data.visits || 0) + 1;
+          setTotalVisits(nextCount);
+          await supabase
+            .from('site_stats')
+            .update({ visits: nextCount })
+            .eq('id', 'home');
+        }
+      } catch (err) {
+        console.error('Lỗi cập nhật lượt truy cập:', err);
+      }
+    };
+    updateRealVisits();
+
     return () => {
       clearInterval(timer);
       stopAllSpeech();
@@ -196,7 +217,6 @@ export default function HomePage() {
       };
 
       audio.onerror = () => {
-        // Nếu đoạn hiện tại lỗi thì thử chuyển sang đoạn kế tiếp thay vì ngắt ngang cả bài
         idx++;
         if (idx < mergedChunks.length) {
           playNextChunk();
