@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 
-// Hàm chuyển đổi đơn vị kỹ thuật nông nghiệp trực tiếp, giữ nguyên 100% câu chữ bài viết
 function normalizeVietnameseText(text) {
   return text
-    .replace(/<[^>]*>/g, ' ') // Xóa thẻ HTML
+    .replace(/<[^>]*>/g, ' ')
     .replace(/(\d+)\s*-\s*(\d+)/g, '$1 đến $2')
     .replace(/đ\/kg/gi, 'đồng trên một ki-lô-gam')
     .replace(/đ\/con/gi, 'đồng trên một con')
@@ -21,6 +20,7 @@ function normalizeVietnameseText(text) {
     .trim();
 }
 
+// 1. POST: Chia toàn bộ bài viết thành các đoạn ngắn < 180 ký tự (giữ nguyên 100% nội dung)
 export async function POST(req) {
   try {
     const { text } = await req.json();
@@ -29,8 +29,6 @@ export async function POST(req) {
     }
 
     const cleanText = normalizeVietnameseText(text);
-
-    // Chia văn bản thành các câu/đoạn nhỏ dưới 180 ký tự để không bao giờ bị cắt ngang
     const rawSentences = cleanText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleanText];
     const chunks = [];
     let currentChunk = '';
@@ -42,7 +40,6 @@ export async function POST(req) {
         currentChunk = (currentChunk + ' ' + s).trim();
       } else {
         if (currentChunk) chunks.push(currentChunk);
-        // Nếu 1 câu đơn lẻ dài hơn 180 ký tự thì cắt theo dấu phẩy hoặc khoảng trắng
         if (s.length > 180) {
           const words = s.split(' ');
           let temp = '';
@@ -62,17 +59,45 @@ export async function POST(req) {
     }
     if (currentChunk) chunks.push(currentChunk);
 
-    // Tạo danh sách URL âm thanh Google TTS cho toàn bộ các đoạn của bài viết
-    const audioUrls = chunks.map(
-      (chunk) =>
-        `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(
-          chunk
-        )}&tl=vi&client=tw-ob`
-    );
+    // Trỏ về chính API nội bộ (/api/tts?q=...) để trình duyệt không bị Google chặn Referer
+    const audioUrls = chunks.map((chunk) => `/api/tts?q=${encodeURIComponent(chunk)}`);
 
-    return NextResponse.json({ audioUrls, totalChunks: chunks.length });
+    return NextResponse.json({ audioUrls });
   } catch (error) {
-    console.error('Lỗi TTS:', error);
-    return NextResponse.json({ error: 'Không thể tạo âm thanh' }, { status: 500 });
+    return NextResponse.json({ error: 'Lỗi xử lý văn bản' }, { status: 500 });
+  }
+}
+
+// 2. GET: Tải luồng MP3 sạch từ Google TTS và trả thẳng về cho trình duyệt phát
+export async function GET(req) {
+  const { searchParams } = new URL(req.url);
+  const q = searchParams.get('q');
+  if (!q) return new NextResponse('Missing text', { status: 400 });
+
+  try {
+    const googleUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(
+      q
+    )}&tl=vi&client=tw-ob`;
+
+    const response = await fetch(googleUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    });
+
+    if (!response.ok) {
+      return new NextResponse('TTS upstream error', { status: 502 });
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return new NextResponse(arrayBuffer, {
+      headers: {
+        'Content-Type': 'audio/mpeg',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    });
+  } catch (error) {
+    return new NextResponse('Error fetching audio', { status: 500 });
   }
 }

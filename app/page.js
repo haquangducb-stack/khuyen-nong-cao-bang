@@ -1,143 +1,173 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
-import { QRCodeCanvas } from 'qrcode.react';
-import {
-  Newspaper, BookOpen, Trophy, ClipboardList, MessageSquare,
-  Volume2, VolumeX, Eye, Clock, CheckCircle,
-  QrCode, Send, Lock, ArrowRight, RotateCcw, Award
-} from 'lucide-react';
-import Link from 'next/link';
+import { createClient } from '@supabase/supabase-js';
 
-const parsePrizes = (prizeStr) => {
-  if (!prizeStr) return [];
-  try {
-    const parsed = JSON.parse(prizeStr);
-    if (Array.isArray(parsed)) return parsed;
-  } catch {}
-  return [{ rank: 'Giải thưởng', quantity: '01', value: prizeStr }];
-};
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState('news');
-  const [fontSize, setFontSize] = useState(16);
-  const [totalVisits, setTotalVisits] = useState(12480);
-
-  const [posts, setPosts] = useState([]);
-  const [selectedPost, setSelectedPost] = useState(null);
-  const [selectedGroup, setSelectedGroup] = useState('Tất cả');
+  const [articles, setArticles] = useState([]);
+  const [selectedArticle, setSelectedArticle] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
+  const [loading, setLoading] = useState(true);
+
+  // Trạng thái đọc văn bản (TTS)
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const audioRef = React.useRef(null);
+  const [speakingArticleId, setSpeakingArticleId] = useState(null);
 
-  const [studyTopics, setStudyTopics] = useState([]);
-  const [activeTopic, setActiveTopic] = useState(null);
-  const [studyAnswers, setStudyAnswers] = useState({});
-  const [studySubmitted, setStudySubmitted] = useState(false);
+  // Trạng thái Hỏi đáp kỹ thuật
+  const [questions, setQuestions] = useState([]);
+  const [newQuestion, setNewQuestion] = useState({
+    full_name: '',
+    address: '',
+    category: 'Trồng trọt',
+    content: '',
+  });
+  const [submittingQA, setSubmittingQA] = useState(false);
 
-  const [competitions, setCompetitions] = useState([]);
-  const [activeComp, setActiveComp] = useState(null);
-  const [compAnswers, setCompAnswers] = useState({});
-  const [compForm, setCompForm] = useState({ full_name: '', phone: '', commune: '', predicted: '' });
-  const [compResult, setCompResult] = useState(null);
-
+  // Trạng thái Khảo sát
   const [surveys, setSurveys] = useState([]);
-  const [activeSurvey, setActiveSurvey] = useState(null);
-  const [surveyAnswers, setSurveyAnswers] = useState({});
-  const [surveyMeta, setSurveyMeta] = useState({ respondent_name: '', commune: '' });
-  const [surveySubmitted, setSurveySubmitted] = useState(false);
-  const [qrModalTitle, setQrModalTitle] = useState('');
+  const [votedSurveys, setVotedSurveys] = useState({});
 
-  const [qaList, setQaList] = useState([]);
-  const [qaForm, setQaForm] = useState({ asker_name: '', commune: '', question: '' });
-  const [qaSent, setQaSent] = useState(false);
+  // Trạng thái Đấu trường nông dân (Quiz)
+  const [quizIndex, setQuizIndex] = useState(0);
+  const [quizScore, setQuizScore] = useState(0);
+  const [quizAnswered, setQuizAnswered] = useState(null);
+  const [quizFinished, setQuizFinished] = useState(false);
 
-  const [now, setNow] = useState(null);
+  const quizData = [
+    {
+      question: 'Thời điểm tiêm phòng vắc-xin Lở mồm long móng định kỳ tốt nhất cho đàn trâu, bò tại Cao Bằng là khi nào?',
+      options: [
+        'Vụ Xuân Hè (tháng 3–4) và vụ Thu Đông (tháng 9–10)',
+        'Chỉ tiêm vào giữa mùa đông giá rét',
+        'Khi vật nuôi đang sốt cao và bỏ ăn',
+        'Chỉ tiêm một lần duy nhất trong đời vật nuôi',
+      ],
+      answer: 0,
+    },
+    {
+      question: 'Giống lợn bản địa đặc trưng nào của tỉnh Cao Bằng nổi tiếng với khả năng chịu rét, thịt thơm ngon và đang được bảo tồn nguồn gen?',
+      options: ['Lợn Móng Cái', 'Lợn Hạ Lang', 'Lợn rừng Thái Lan', 'Lợn Landrace'],
+      answer: 1,
+    },
+    {
+      question: 'Biện pháp hiệu quả nhất để phòng chống rét đậm, rét hại cho đàn đại gia súc ở vùng cao Cao Bằng là gì?',
+      options: [
+        'Thả rông gia súc vào rừng sâu tự kiếm ăn',
+        'Che chắn chuồng trại kín gió, dự trữ rơm khô/cỏ ủ chua và bổ sung tinh bột, muối khoáng',
+        'Tắm nước lạnh hàng ngày để tăng sức đề kháng',
+        'Không cần lót nền chuồng vì trâu bò chịu rét tốt',
+      ],
+      answer: 1,
+    },
+  ];
 
-  const categoryTree = {
-    'Bản tin Khuyến nông': [
-      'Bản tin mùa vụ',
-      'Bản tin thị trường',
-      'Tin Khuyến nông Cao Bằng',
-      'Tin từ Khuyến nông Quốc gia'
-    ],
-    'Kỹ thuật': [
-      'Kỹ thuật Chăn nuôi - Thú y',
-      'Kỹ thuật Trồng trọt - Lâm nghiệp',
-      'Kỹ thuật Thủy sản'
-    ],
-    'Giới thiệu sản phẩm': ['Giới thiệu sản phẩm']
-  };
+  // Dữ liệu mẫu hiển thị ngay nếu Supabase chưa có bài viết
+  const fallbackArticles = [
+    {
+      id: 'sample-1',
+      title: 'Khung lịch thời vụ gieo trồng vụ Đông – Xuân năm 2026 - 2027 tại Cao Bằng',
+      category: 'Trồng trọt',
+      summary: 'Hướng dẫn bà con nông dân lựa chọn bộ giống lúa, ngô chủ lực ngắn ngày, chịu rét tốt và bố trí thời vụ gieo trồng hợp lý nhằm né tránh rét đậm, rét hại đầu vụ.',
+      content: 'Để đảm bảo sản xuất vụ Đông – Xuân đạt năng suất cao, Trung tâm Khuyến nông và Giống Nông lâm nghiệp tỉnh Cao Bằng khuyến cáo bà con tập trung làm đất sớm, vệ sinh đồng ruộng. Đối với trà lúa Xuân muộn, tiến hành gieo mạ từ cuối tháng 1 đến đầu tháng 2, cấy tập trung trong tháng 2 khi nhiệt độ trung bình ngày đêm đạt trên 15 độ C. Sử dụng các giống lúa chất lượng cao như Hương Thơm số 1, J02, Đài Thơm 8, kết hợp bón phân cân đối NPK và che phủ nilon 100% diện tích mạ để chống rét.',
+      image_url: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80',
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'sample-2',
+      title: 'Triển khai mô hình chuyển đổi đất trồng keo kém hiệu quả sang trồng quế bền vững',
+      category: 'Lâm nghiệp',
+      summary: 'Hỗ trợ người dân các xã vùng cao phát triển vùng nguyên liệu quế gắn với liên kết tiêu thụ sản phẩm theo Nghị định 58/2024/NĐ-CP.',
+      content: 'Cây quế là loài cây đa tác dụng, mang lại giá trị kinh tế cao gấp 2 đến 3 lần so với trồng keo truyền thống nhờ khai thác được cả vỏ, cành, lá để chưng cất tinh dầu. Bà con cần chọn cây giống quế đạt tiêu chuẩn từ 12 đến 18 tháng tuổi, chiều cao trên 40 cm, mật độ trồng khoảng 3.300 cây trên 1 héc-ta, thực hiện phát dọn thực bì và bón lót phân chuồng hoai mục trước khi trồng vào vụ Xuân hoặc vụ Thu.',
+      image_url: 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?auto=format&fit=crop&w=800&q=80',
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'sample-3',
+      title: 'Kỹ thuật ủ chua thức ăn xanh dự trữ cho trâu, bò trong mùa đông',
+      category: 'Chăn nuôi',
+      summary: 'Tận dụng thân cây ngô sau thu hoạch, cỏ voi và phụ phẩm nông nghiệp để chế biến thức ăn giàu dinh dưỡng cho đàn gia súc.',
+      content: 'Nguyên liệu cỏ voi hoặc thân cây ngô sau khi thu hái cần phơi héo nhẹ còn độ ẩm khoảng 65 đến 70 phần trăm, băm ngắn từ 3 đến 5 cm. Phối trộn theo tỷ lệ 100 kg nguyên liệu xanh với 0,5 kg muối ăn và 5 kg cám ngô hoặc cám gạo. Nén thật chặt vào túi nilon chuyên dụng hoặc hố ủ, buộc kín miệng để lên men yếm khí. Sau 21 ngày thức ăn có mùi thơm chua nhẹ, màu vàng rơm là có thể cho trâu, bò ăn dần.',
+      image_url: 'https://images.unsplash.com/photo-1516467508483-a7212febe31a?auto=format&fit=crop&w=800&q=80',
+      created_at: new Date().toISOString(),
+    },
+  ];
 
   useEffect(() => {
-    fetchPublicData();
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    const savedVisits = Number(localStorage.getItem('kncb_visits') || 12480) + 1;
-    localStorage.setItem('kncb_visits', savedVisits);
-    setTotalVisits(savedVisits);
+    fetchData();
     return () => {
-      clearInterval(timer);
-      if (typeof window !== 'undefined' && window.speechSynthesis) {
-        window.speechSynthesis.cancel();
-      }
+      stopAllAudio();
     };
   }, []);
 
-  const fetchPublicData = async () => {
-    const [p, st, c, sv, qa] = await Promise.all([
-      supabase.from('posts').select('*').order('created_at', { ascending: false }),
-      supabase.from('study_topics').select('*').order('created_at', { ascending: false }),
-      supabase.from('competitions').select('*').order('created_at', { ascending: false }),
-      supabase.from('surveys').select('*').order('created_at', { ascending: false }),
-      supabase.from('qa_questions').select('*').eq('is_published', true).order('created_at', { ascending: false }),
-    ]);
-    if (p.data) setPosts(p.data);
-    if (st.data) setStudyTopics(st.data);
-    if (c.data) setCompetitions(c.data);
-    if (sv.data) setSurveys(sv.data);
-    if (qa.data) setQaList(qa.data);
-  };
-
-  const handleOpenPost = async (post) => {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      setIsSpeaking(false);
-    }
-    setSelectedPost(post);
-    const nextViews = (post.views || 0) + 1;
-    setPosts(posts.map(item => item.id === post.id ? { ...item, views: nextViews } : item));
-    await supabase.from('posts').update({ views: nextViews }).eq('id', post.id);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const stopAllSpeech = () => {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    setIsSpeaking(false);
-  };
-
-  const handleReadArticle = async (article) => {
-    // Nếu đang đọc thì bấm lần nữa để dừng hẳn
-    if (isSpeaking) {
-      if (window.currentAudio) {
-        window.currentAudio.pause();
-        window.currentAudio = null;
-      }
-      window.speechSynthesis?.cancel();
-      setIsSpeaking(false);
+  const fetchData = async () => {
+    setLoading(true);
+    if (!supabase) {
+      setArticles(fallbackArticles);
+      setLoading(false);
       return;
     }
 
     try {
+      const [newsRes, qaRes, surveyRes] = await Promise.all([
+        supabase.from('articles').select('*').order('created_at', { ascending: false }),
+        supabase.from('questions').select('*').order('created_at', { ascending: false }),
+        supabase.from('surveys').select('*').order('created_at', { ascending: false }),
+      ]);
+
+      if (newsRes.data && newsRes.data.length > 0) {
+        setArticles(newsRes.data);
+      } else {
+        setArticles(fallbackArticles);
+      }
+
+      if (qaRes.data) setQuestions(qaRes.data);
+      if (surveyRes.data) setSurveys(surveyRes.data);
+    } catch (err) {
+      console.error('Lỗi tải dữ liệu:', err);
+      setArticles(fallbackArticles);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Dừng toàn bộ âm thanh đang phát
+  const stopAllAudio = () => {
+    if (typeof window !== 'undefined') {
+      if (window.currentAudio) {
+        window.currentAudio.pause();
+        window.currentAudio.src = '';
+        window.currentAudio = null;
+      }
+      window.speechSynthesis?.cancel();
+    }
+    setIsSpeaking(false);
+    setSpeakingArticleId(null);
+  };
+
+  // Hàm đọc nguyên văn toàn bộ bài viết nối tiếp từng đoạn
+  const handleReadArticle = async (article, e) => {
+    if (e) e.stopPropagation();
+
+    // Nếu đang đọc chính bài này thì bấm lần nữa để dừng
+    if (isSpeaking && speakingArticleId === article.id) {
+      stopAllAudio();
+      return;
+    }
+
+    // Dừng bài trước (nếu có) trước khi đọc bài mới
+    stopAllAudio();
+
+    const fullContent = `${article.title}. ${article.summary || ''}. ${article.content || ''}`;
+
+    try {
       setIsSpeaking(true);
-      // Ghép Tiêu đề + Tóm tắt + Toàn bộ nội dung chi tiết bài viết
-      const fullContent = `${article.title}. ${article.summary || ''}. ${article.content || ''}`;
+      setSpeakingArticleId(article.id);
 
       const res = await fetch('/api/tts', {
         method: 'POST',
@@ -147,739 +177,341 @@ export default function HomePage() {
 
       const data = await res.json();
       if (!data.audioUrls || data.audioUrls.length === 0) {
-        setIsSpeaking(false);
-        return;
+        throw new Error('Không có danh sách audioUrls');
       }
 
-      // Phát nối tiếp từng đoạn cho đến khi hết toàn bộ bài viết
       let index = 0;
+      let stopped = false;
+
       const playNextChunk = () => {
-        if (index >= data.audioUrls.length) {
+        if (stopped || index >= data.audioUrls.length) {
           setIsSpeaking(false);
+          setSpeakingArticleId(null);
           window.currentAudio = null;
           return;
         }
+
         const audio = new Audio(data.audioUrls[index]);
         window.currentAudio = audio;
+
         audio.onended = () => {
           index++;
           playNextChunk();
         };
+
         audio.onerror = () => {
           index++;
           playNextChunk();
         };
-        audio.play().catch(() => {
-          setIsSpeaking(false);
+
+        audio.play().catch((err) => {
+          console.error('Lỗi phát audio:', err);
+          stopped = true;
+          fallbackBrowserSpeak(fullContent);
         });
       };
 
       playNextChunk();
     } catch (err) {
-      console.error(err);
+      console.error('Chuyển sang giọng đọc dự phòng:', err);
+      fallbackBrowserSpeak(fullContent);
+    }
+  };
+
+  const fallbackBrowserSpeak = (text) => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      const plainText = text.replace(/<[^>]*>/g, ' ');
+      const utterance = new SpeechSynthesisUtterance(plainText);
+      utterance.lang = 'vi-VN';
+      utterance.rate = 0.95;
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        setSpeakingArticleId(null);
+      };
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+        setSpeakingArticleId(null);
+      };
+      window.speechSynthesis.speak(utterance);
+    } else {
       setIsSpeaking(false);
+      setSpeakingArticleId(null);
     }
   };
 
-  const formatCountdown = (endTimeStr) => {
-    if (!now) return 'Đang tính...';
-    const diff = new Date(endTimeStr).getTime() - now.getTime();
-    if (diff <= 0) return 'Đã hết hạn';
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-    const mins = Math.floor((diff / (1000 * 60)) % 60);
-    const secs = Math.floor((diff / 1000) % 60);
-    return `Còn ${days} ngày ${hours}g ${mins}p ${secs}s`;
-  };
-
-  const handleSubmitCompetition = async (e) => {
+  // Gửi câu hỏi kỹ thuật mới
+  const handleQuestionSubmit = async (e) => {
     e.preventDefault();
-    if (!activeComp) return;
-    if (new Date(activeComp.end_time) <= new Date()) {
-      alert('Cuộc thi đã hết hạn nộp bài!');
-      return;
-    }
-    const questions = activeComp.questions || [];
-    if (Object.keys(compAnswers).length < questions.length) {
-      alert('Bà con vui lòng trả lời đầy đủ tất cả câu hỏi trước khi nộp!');
-      return;
-    }
+    if (!newQuestion.full_name.trim() || !newQuestion.content.trim()) return;
 
-    let score = 0;
-    questions.forEach((q, idx) => {
-      if (compAnswers[idx] === q.answer) score++;
-    });
+    setSubmittingQA(true);
+    try {
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('questions')
+          .insert([{ ...newQuestion, status: 'pending' }])
+          .select();
 
-    const { error } = await supabase.from('competition_entries').insert([{
-      competition_id: activeComp.id,
-      full_name: compForm.full_name.trim(),
-      phone: compForm.phone.trim(),
-      commune: compForm.commune.trim(),
-      score,
-      total_questions: questions.length,
-      predicted_winners: Number(compForm.predicted) || 0
-    }]);
-
-    if (error) {
-      if (error.code === '23505') {
-        alert('Số điện thoại này đã tham gia dự thi kỳ này rồi!');
+        if (!error && data) {
+          setQuestions([data[0], ...questions]);
+        }
       } else {
-        alert('Có lỗi khi gửi bài thi: ' + error.message);
+        setQuestions([
+          {
+            id: Date.now(),
+            ...newQuestion,
+            answer: null,
+            created_at: new Date().toISOString(),
+          },
+          ...questions,
+        ]);
       }
-      return;
-    }
-
-    setCompResult({ score, total: questions.length });
-  };
-
-  const handleOpenSurvey = (survey) => {
-    setActiveSurvey(survey);
-    setSurveySubmitted(false);
-    const draft = localStorage.getItem(`survey_draft_${survey.id}`);
-    setSurveyAnswers(draft ? JSON.parse(draft) : {});
-  };
-
-  const handleSurveyAnswerChange = (qId, val) => {
-    const updated = { ...surveyAnswers, [qId]: val };
-    setSurveyAnswers(updated);
-    if (activeSurvey) {
-      localStorage.setItem(`survey_draft_${activeSurvey.id}`, JSON.stringify(updated));
+      setNewQuestion({ full_name: '', address: '', category: 'Trồng trọt', content: '' });
+      alert('Đã gửi câu hỏi thành công! Cán bộ kỹ thuật Trung tâm Khuyến nông sẽ phản hồi sớm nhất.');
+    } catch (err) {
+      alert('Có lỗi xảy ra khi gửi câu hỏi, vui lòng thử lại.');
+    } finally {
+      setSubmittingQA(false);
     }
   };
 
-  const handleSurveyMultiToggle = (qId, opt) => {
-    const current = Array.isArray(surveyAnswers[qId]) ? surveyAnswers[qId] : [];
-    const next = current.includes(opt) ? current.filter(item => item !== opt) : [...current, opt];
-    handleSurveyAnswerChange(qId, next);
-  };
+  // Bình chọn khảo sát
+  const handleVote = async (survey, optionIndex) => {
+    if (votedSurveys[survey.id]) return;
 
-  const handleSubmitSurvey = async (e) => {
-    e.preventDefault();
-    if (!activeSurvey) return;
-    if (new Date(activeSurvey.end_time) <= new Date()) {
-      alert('Đợt khảo sát này đã đóng!');
-      return;
+    const updatedOptions = [...(survey.options || [])];
+    if (updatedOptions[optionIndex]) {
+      updatedOptions[optionIndex].votes = (updatedOptions[optionIndex].votes || 0) + 1;
     }
-    const { error } = await supabase.from('survey_responses').insert([{
-      survey_id: activeSurvey.id,
-      respondent_name: surveyMeta.respondent_name.trim() || 'Ẩn danh',
-      commune: surveyMeta.commune.trim(),
-      answers: surveyAnswers
-    }]);
-    if (error) {
-      alert('Lỗi gửi phiếu khảo sát: ' + error.message);
-      return;
-    }
-    localStorage.removeItem(`survey_draft_${activeSurvey.id}`);
-    setSurveySubmitted(true);
-  };
 
-  const handleSendQa = async (e) => {
-    e.preventDefault();
-    const { error } = await supabase.from('qa_questions').insert([{
-      asker_name: qaForm.asker_name.trim(),
-      commune: qaForm.commune.trim(),
-      question: qaForm.question.trim()
-    }]);
-    if (!error) {
-      setQaSent(true);
-      setQaForm({ asker_name: '', commune: '', question: '' });
+    setVotedSurveys({ ...votedSurveys, [survey.id]: true });
+    setSurveys(surveys.map((s) => (s.id === survey.id ? { ...s, options: updatedOptions } : s)));
+
+    if (supabase) {
+      await supabase.from('surveys').update({ options: updatedOptions }).eq('id', survey.id);
     }
   };
 
-  const filteredPosts = posts.filter(p => {
-    if (selectedGroup === 'Tất cả') return true;
-    if (selectedCategory !== 'Tất cả') return p.category === selectedCategory;
-    return (categoryTree[selectedGroup] || []).includes(p.category);
+  // Lọc bài viết
+  const categories = ['Tất cả', 'Trồng trọt', 'Chăn nuôi', 'Lâm nghiệp', 'Thủy sản', 'Thị trường'];
+  const filteredArticles = articles.filter((art) => {
+    const matchesCat = selectedCategory === 'Tất cả' || art.category === selectedCategory;
+    const matchesSearch =
+      art.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      art.summary?.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesCat && matchesSearch;
   });
 
   return (
-    <div className="min-h-screen bg-stone-50 text-gray-800 flex flex-col" style={{ fontSize: `${fontSize}px` }}>
-      <header className="bg-gradient-to-r from-emerald-900 via-emerald-800 to-green-800 text-white shadow-md">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-wider text-emerald-200 font-semibold">
-              Sở Nông nghiệp và Môi trường tỉnh Cao Bằng
-            </p>
-            <h1 className="text-lg md:text-2xl font-bold mt-0.5">
-              CỔNG THÔNG TIN & TƯƠNG TÁC KHUYẾN NÔNG CAO BẰNG
-            </h1>
+    <div className="min-h-screen flex flex-col bg-stone-50 text-gray-800">
+      {/* Header Banner */}
+      <header className="bg-gradient-to-r from-emerald-800 via-emerald-700 to-teal-700 text-white shadow-lg">
+        <div className="max-w-6xl mx-auto px-4 py-6">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <p className="text-emerald-200 text-xs sm:text-sm font-semibold uppercase tracking-wider">
+                Sở Nông nghiệp và Môi trường tỉnh Cao Bằng
+              </p>
+              <h1 className="text-xl sm:text-2xl md:text-3xl font-extrabold mt-1 tracking-tight">
+                CỔNG THÔNG TIN & TƯƠNG TÁC KHUYẾN NÔNG CAO BẰNG
+              </h1>
+              <p className="text-emerald-100 text-sm mt-1">
+                Trung tâm Khuyến nông và Giống Nông lâm nghiệp tỉnh Cao Bằng
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <a
+                href="/admin"
+                className="bg-white/15 hover:bg-white/25 text-white border border-white/30 px-4 py-2 rounded-lg text-sm font-medium transition backdrop-blur-sm"
+              >
+                Quản trị viên
+              </a>
+            </div>
           </div>
-          <div className="flex items-center gap-2 bg-emerald-950/50 px-3 py-1.5 rounded-lg border border-emerald-700">
-            <span className="text-xs text-emerald-200">Cỡ chữ:</span>
-            <button onClick={() => setFontSize(Math.max(14, fontSize - 2))} className="px-2 py-0.5 bg-emerald-800 hover:bg-emerald-700 rounded text-xs font-bold">A-</button>
-            <button onClick={() => setFontSize(Math.min(22, fontSize + 2))} className="px-2 py-0.5 bg-emerald-800 hover:bg-emerald-700 rounded text-xs font-bold">A+</button>
-          </div>
-        </div>
 
-        <nav className="bg-emerald-950/60 border-t border-emerald-700/60">
-          <div className="max-w-6xl mx-auto px-4 flex overflow-x-auto gap-1">
+          {/* Thanh điều hướng chính */}
+          <nav className="flex flex-wrap gap-2 mt-6 pt-4 border-t border-emerald-600/50">
             {[
-              { id: 'news', label: 'Tin tức & Kỹ thuật', icon: Newspaper },
-              { id: 'study', label: 'Nông dân học tập', icon: BookOpen },
-              { id: 'comp', label: 'Nông dân thi', icon: Trophy },
-              { id: 'surveys', label: 'Khảo sát trực tuyến', icon: ClipboardList },
-              { id: 'qa', label: 'Hỏi đáp Khuyến nông', icon: MessageSquare },
-            ].map(tab => (
+              { id: 'news', label: 'Tin tức & Kỹ thuật' },
+              { id: 'qa', label: 'Hỏi đáp Nhà nông' },
+              { id: 'survey', label: 'Khảo sát thực tế' },
+              { id: 'quiz', label: 'Đấu trường Nông dân' },
+            ].map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => {
                   setActiveTab(tab.id);
-                  setSelectedPost(null);
-                  setActiveTopic(null);
-                  setActiveComp(null);
-                  setActiveSurvey(null);
+                  setSelectedArticle(null);
                 }}
-                className={`px-4 py-3 text-sm font-semibold flex items-center gap-2 whitespace-nowrap border-b-2 transition ${
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
                   activeTab === tab.id
-                    ? 'bg-white text-emerald-900 border-amber-400 rounded-t-lg mt-1'
-                    : 'text-emerald-100 hover:text-white border-transparent'
+                    ? 'bg-amber-400 text-emerald-950 shadow'
+                    : 'bg-emerald-900/40 text-emerald-50 hover:bg-emerald-900/70'
                 }`}
               >
-                <tab.icon size={17} /> {tab.label}
+                {tab.label}
               </button>
             ))}
-          </div>
-        </nav>
+          </nav>
+        </div>
       </header>
 
-      <main className="max-w-6xl w-full mx-auto px-4 py-6 flex-1">
+      {/* Nội dung chính */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8">
+        {/* TAB 1: TIN TỨC & KỸ THUẬT */}
         {activeTab === 'news' && (
           <div>
-            {selectedPost ? (
-              <article className="bg-white rounded-2xl shadow-sm border p-6 md:p-8 max-w-4xl mx-auto">
-                <button
-                  onClick={() => {
-                    if (typeof window !== 'undefined' && window.speechSynthesis) window.speechSynthesis.cancel();
-                    setIsSpeaking(false);
-                    setSelectedPost(null);
-                  }}
-                  className="text-sm text-emerald-700 font-semibold mb-4 hover:underline"
-                >
-                  ← Quay lại danh sách bài viết
-                </button>
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                  <span className="bg-emerald-100 text-emerald-800 text-xs font-semibold px-3 py-1 rounded-full">
-                    {selectedPost.category}
-                  </span>
-                  <button
-                    onClick={() => handleToggleSpeech(selectedPost)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 ${
-                      isSpeaking ? 'bg-red-600 text-white' : 'bg-amber-100 text-amber-900 hover:bg-amber-200'
-                    }`}
-                  >
-                    {isSpeaking ? <><VolumeX size={15} /> Dừng đọc</> : <><Volume2 size={15} /> Nghe đọc bài</>}
-                  </button>
-                </div>
-                <h2 className="text-2xl md:text-3xl font-bold text-gray-900 leading-snug mb-3">
-                  {selectedPost.title}
-                </h2>
-                <div className="text-xs text-gray-500 flex flex-wrap gap-4 pb-4 mb-6 border-b">
-                  <span>Nguồn: <strong>{selectedPost.source_name}</strong></span>
-                  <span className="flex items-center gap-1"><Eye size={14} /> {selectedPost.views || 0} lượt xem</span>
-                  <span>{new Date(selectedPost.created_at).toLocaleDateString('vi-VN')}</span>
-                </div>
-                <div
-                  className="prose max-w-none leading-relaxed text-gray-800"
-                  dangerouslySetInnerHTML={{ __html: selectedPost.content }}
-                />
-                {selectedPost.source_url && (
-                  <div className="mt-6 pt-4 border-t text-sm">
-                    <a href={selectedPost.source_url} target="_blank" rel="noreferrer" className="text-emerald-700 underline">
-                      Xem bài gốc tại Cổng thông tin Khuyến nông Quốc gia →
-                    </a>
-                  </div>
-                )}
-              </article>
-            ) : (
-              <div className="space-y-6">
-                <div className="space-y-3">
-                  <div className="flex gap-2 overflow-x-auto pb-1">
-                    {['Tất cả', 'Bản tin Khuyến nông', 'Kỹ thuật', 'Giới thiệu sản phẩm'].map(grp => (
-                      <button
-                        key={grp}
-                        onClick={() => {
-                          setSelectedGroup(grp);
-                          setSelectedCategory(grp === 'Giới thiệu sản phẩm' ? 'Giới thiệu sản phẩm' : 'Tất cả');
-                        }}
-                        className={`px-4 py-2 rounded-xl text-xs md:text-sm font-bold whitespace-nowrap border transition ${
-                          selectedGroup === grp
-                            ? 'bg-emerald-800 text-white border-emerald-800 shadow-sm'
-                            : 'bg-white text-gray-700 hover:bg-emerald-50'
-                        }`}
-                      >
-                        {grp}
-                      </button>
-                    ))}
+            {selectedArticle ? (
+              /* Chi tiết bài viết */
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-6 sm:p-8">
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+                    <button
+                      onClick={() => {
+                        stopAllAudio();
+                        setSelectedArticle(null);
+                      }}
+                      className="text-emerald-700 hover:text-emerald-900 font-semibold text-sm flex items-center gap-1"
+                    >
+                      ← Quay lại danh sách bản tin
+                    </button>
+
+                    <button
+                      onClick={() => handleReadArticle(selectedArticle)}
+                      className={`px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-2 transition shadow-sm ${
+                        isSpeaking && speakingArticleId === selectedArticle.id
+                          ? 'bg-rose-600 text-white hover:bg-rose-700'
+                          : 'bg-emerald-700 text-white hover:bg-emerald-800'
+                      }`}
+                    >
+                      {isSpeaking && speakingArticleId === selectedArticle.id ? (
+                        <>⏹ Dừng đọc bài</>
+                      ) : (
+                        <>🔊 Nghe đọc toàn bộ bài viết</>
+                      )}
+                    </button>
                   </div>
 
-                  {(selectedGroup === 'Bản tin Khuyến nông' || selectedGroup === 'Kỹ thuật') && (
-                    <div className="flex gap-2 overflow-x-auto pb-1 pl-1">
-                      <button
-                        onClick={() => setSelectedCategory('Tất cả')}
-                        className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap border ${
-                          selectedCategory === 'Tất cả'
-                            ? 'bg-amber-600 text-white border-amber-600'
-                            : 'bg-amber-50/70 text-amber-950 border-amber-200 hover:bg-amber-100'
-                        }`}
-                      >
-                        Tất cả {selectedGroup}
-                      </button>
-                      {categoryTree[selectedGroup].map(sub => (
-                        <button
-                          key={sub}
-                          onClick={() => setSelectedCategory(sub)}
-                          className={`px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap border ${
-                            selectedCategory === sub
-                              ? 'bg-amber-600 text-white border-amber-600'
-                              : 'bg-white text-gray-700 hover:bg-amber-50'
-                          }`}
-                        >
-                          {sub}
-                        </button>
-                      ))}
+                  <span className="inline-block bg-emerald-100 text-emerald-800 text-xs font-bold px-3 py-1 rounded-full mb-3">
+                    {selectedArticle.category || 'Khuyến nông'}
+                  </span>
+                  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 leading-snug">
+                    {selectedArticle.title}
+                  </h2>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Ngày đăng:{' '}
+                    {selectedArticle.created_at
+                      ? new Date(selectedArticle.created_at).toLocaleDateString('vi-VN')
+                      : 'Hôm nay'}
+                  </p>
+
+                  {selectedArticle.image_url && (
+                    <img
+                      src={selectedArticle.image_url}
+                      alt={selectedArticle.title}
+                      className="w-full max-h-96 object-cover rounded-xl my-6 border border-gray-100"
+                    />
+                  )}
+
+                  {selectedArticle.summary && (
+                    <div className="bg-emerald-50/70 border-l-4 border-emerald-600 p-4 rounded-r-lg my-5 text-gray-700 font-medium italic">
+                      {selectedArticle.summary}
                     </div>
                   )}
+
+                  <div className="prose max-w-none text-gray-800 leading-relaxed whitespace-pre-line text-base sm:text-lg mt-4">
+                    {selectedArticle.content}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Danh sách bài viết */
+              <div>
+                {/* Thanh tìm kiếm & bộ lọc chuyên mục */}
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6 flex flex-col md:flex-row gap-4 justify-between items-center">
+                  <div className="flex flex-wrap gap-2">
+                    {categories.map((cat) => (
+                      <button
+                        key={cat}
+                        onClick={() => setSelectedCategory(cat)}
+                        className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition ${
+                          selectedCategory === cat
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Tìm kiếm kỹ thuật, giống cây, vật nuôi..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full md:w-72 px-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                  />
                 </div>
 
-                {filteredPosts.length === 0 ? (
-                  <div className="bg-white p-10 rounded-xl border text-center text-gray-500">
-                    Chưa có bài viết nào trong chuyên mục này.
+                {loading ? (
+                  <div className="text-center py-12 text-gray-500">Đang tải bản tin khuyến nông...</div>
+                ) : filteredArticles.length === 0 ? (
+                  <div className="text-center py-12 bg-white rounded-xl border border-gray-200 text-gray-500">
+                    Không tìm thấy bài viết phù hợp.
                   </div>
                 ) : (
-                  <div className="grid md:grid-cols-3 gap-6">
-                    {filteredPosts.map(post => (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {filteredArticles.map((article) => (
                       <div
-                        key={post.id}
-                        onClick={() => handleOpenPost(post)}
-                        className="bg-white rounded-xl border shadow-sm hover:shadow-md transition overflow-hidden cursor-pointer flex flex-col"
+                        key={article.id}
+                        onClick={() => setSelectedArticle(article)}
+                        className="bg-white rounded-xl shadow-sm hover:shadow-md transition border border-gray-200 overflow-hidden flex flex-col cursor-pointer group"
                       >
-                        <img
-                          src={post.thumbnail || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80'}
-                          alt={post.title}
-                          className="h-44 w-full object-cover"
-                        />
-                        <div className="p-4 flex-1 flex flex-col justify-between">
-                          <div>
-                            <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                              {post.category}
-                            </span>
-                            <h3 className="font-bold text-gray-900 mt-2 line-clamp-2">{post.title}</h3>
-                            <p className="text-xs text-gray-600 mt-1.5 line-clamp-2">{post.summary}</p>
-                          </div>
-                          <div className="mt-4 pt-3 border-t flex justify-between items-center text-[11px] text-gray-500">
-                            <span>{post.source_name}</span>
-                            <span className="flex items-center gap-1"><Eye size={13} /> {post.views || 0}</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'study' && (
-          <div>
-            {activeTopic ? (
-              <div className="bg-white rounded-2xl border shadow-sm p-6 max-w-3xl mx-auto space-y-6">
-                <div className="flex justify-between items-center border-b pb-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-emerald-900">{activeTopic.title}</h2>
-                    <p className="text-xs text-gray-500">{activeTopic.description}</p>
-                  </div>
-                  <button onClick={() => setActiveTopic(null)} className="text-xs text-emerald-700 font-semibold">
-                    ← Chọn chuyên đề khác
-                  </button>
-                </div>
-
-                {(activeTopic.questions || []).map((q, idx) => (
-                  <div key={idx} className="p-4 bg-stone-50 rounded-xl border space-y-2.5">
-                    <p className="font-bold text-gray-900">Câu {idx + 1}: {q.q}</p>
-                    <div className="space-y-2">
-                      {q.options.map((opt, oIdx) => {
-                        const chosen = studyAnswers[idx] === oIdx;
-                        let style = 'bg-white border-gray-200';
-                        if (studySubmitted) {
-                          if (oIdx === q.answer) style = 'bg-emerald-100 border-emerald-600 font-semibold text-emerald-900';
-                          else if (chosen) style = 'bg-red-100 border-red-500 text-red-900';
-                        } else if (chosen) {
-                          style = 'bg-emerald-50 border-emerald-600';
-                        }
-                        return (
-                          <button
-                            key={oIdx}
-                            disabled={studySubmitted}
-                            onClick={() => setStudyAnswers({ ...studyAnswers, [idx]: oIdx })}
-                            className={`w-full text-left p-3 rounded-lg border text-sm transition ${style}`}
-                          >
-                            {opt}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {studySubmitted && q.explain && (
-                      <div className="text-xs bg-amber-50 text-amber-900 p-3 rounded-lg border border-amber-200">
-                        <strong>Giải thích kỹ thuật:</strong> {q.explain}
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {!studySubmitted ? (
-                  <button
-                    onClick={() => setStudySubmitted(true)}
-                    className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-bold py-3 rounded-xl"
-                  >
-                    Chấm điểm & Xem giải thích kỹ thuật
-                  </button>
-                ) : (
-                  <div className="bg-emerald-50 border border-emerald-300 p-5 rounded-xl text-center space-y-3">
-                    <p className="text-lg font-bold text-emerald-900">
-                      Kết quả: Đúng{' '}
-                      {(activeTopic.questions || []).filter((q, idx) => studyAnswers[idx] === q.answer).length}/
-                      {(activeTopic.questions || []).length} câu
-                    </p>
-                    <div className="flex flex-wrap justify-center gap-3">
-                      <button
-                        onClick={() => { setStudyAnswers({}); setStudySubmitted(false); }}
-                        className="bg-white border px-4 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-1"
-                      >
-                        <RotateCcw size={15} /> Làm lại chuyên đề này
-                      </button>
-                      <button
-                        onClick={() => { setActiveTopic(null); setStudyAnswers({}); setStudySubmitted(false); }}
-                        className="bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-1"
-                      >
-                        Thi tiếp bộ câu hỏi khác <ArrowRight size={15} />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-emerald-900 text-white p-6 rounded-2xl">
-                  <h2 className="text-xl font-bold">Chuyên mục Nông dân Học tập</h2>
-                  <p className="text-sm text-emerald-100 mt-1">
-                    Chọn một chuyên đề kỹ thuật dưới đây để tự ôn luyện kiến thức trồng trọt, chăn nuôi, thủy sản.
-                  </p>
-                </div>
-                {studyTopics.length === 0 ? (
-                  <div className="bg-white p-8 rounded-xl border text-center text-gray-500">Chưa có bộ chuyên đề học tập nào.</div>
-                ) : (
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {studyTopics.map(topic => (
-                      <div key={topic.id} className="bg-white p-5 rounded-xl border shadow-sm flex flex-col justify-between">
-                        <div>
-                          <span className="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-semibold">
-                            {topic.questions?.length || 0} câu hỏi trắc nghiệm
-                          </span>
-                          <h3 className="font-bold text-lg mt-2">{topic.title}</h3>
-                          <p className="text-xs text-gray-600 mt-1">{topic.description}</p>
-                        </div>
-                        <button
-                          onClick={() => { setActiveTopic(topic); setStudyAnswers({}); setStudySubmitted(false); }}
-                          className="mt-4 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold py-2.5 rounded-lg"
-                        >
-                          Bắt đầu ôn tập chuyên đề →
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'comp' && (
-          <div>
-            {activeComp ? (
-              <div className="bg-white rounded-2xl border shadow-sm p-6 max-w-3xl mx-auto">
-                <button onClick={() => { setActiveComp(null); setCompResult(null); }} className="text-xs text-emerald-700 font-semibold mb-4">
-                  ← Danh sách các cuộc thi
-                </button>
-                <div className="bg-amber-50 border border-amber-300 p-4 rounded-xl mb-6">
-                  <div className="flex flex-wrap justify-between items-center gap-2">
-                    <span className="text-xs font-bold text-amber-900 uppercase">Chủ đề: {activeComp.theme}</span>
-                    <span className="text-xs bg-red-600 text-white px-2.5 py-1 rounded-full font-semibold flex items-center gap-1">
-                      <Clock size={13} /> {formatCountdown(activeComp.end_time)}
-                    </span>
-                  </div>
-                  <h2 className="text-xl font-bold text-gray-900 mt-1">{activeComp.title}</h2>
-                  <div className="mt-3 pt-3 border-t border-amber-200 space-y-1">
-                    <p className="text-xs font-bold text-amber-950 uppercase flex items-center gap-1">
-                      <Award size={15} /> Cơ cấu giải thưởng:
-                    </p>
-                    {parsePrizes(activeComp.prize_desc).map((pz, idx) => (
-                      <p key={idx} className="text-sm text-emerald-900">
-                        • <strong>{pz.rank}</strong> ({pz.quantity} giải): {pz.value}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-
-                {compResult ? (
-                  <div className="bg-emerald-50 border border-emerald-300 p-6 rounded-xl text-center space-y-3">
-                    <CheckCircle size={40} className="text-emerald-700 mx-auto" />
-                    <h3 className="text-xl font-bold text-emerald-900">Đã ghi nhận bài dự thi thành công!</h3>
-                    <p className="text-base">
-                      Bạn trả lời đúng <strong>{compResult.score}/{compResult.total}</strong> câu hỏi.
-                    </p>
-                  </div>
-                ) : new Date(activeComp.end_time) <= now ? (
-                  <div className="bg-red-50 border border-red-200 p-6 rounded-xl text-center text-red-700 font-semibold">
-                    Cuộc thi này đã hết thời gian nhận bài dự thi.
-                  </div>
-                ) : (
-                  <form onSubmit={handleSubmitCompetition} className="space-y-5">
-                    {(activeComp.questions || []).map((q, idx) => (
-                      <div key={idx} className="p-4 bg-stone-50 rounded-xl border space-y-2">
-                        <p className="font-bold">Câu {idx + 1}: {q.q}</p>
-                        {q.options.map((opt, oIdx) => (
-                          <label key={oIdx} className="flex items-center gap-2.5 p-2.5 bg-white rounded-lg border cursor-pointer hover:bg-emerald-50">
-                            <input
-                              type="radio"
-                              name={`comp_q_${idx}`}
-                              checked={compAnswers[idx] === oIdx}
-                              onChange={() => setCompAnswers({ ...compAnswers, [idx]: oIdx })}
-                            />
-                            <span className="text-sm">{opt}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ))}
-
-                    <div className="p-5 bg-amber-50 rounded-xl border border-amber-300 space-y-3">
-                      <h4 className="font-bold text-amber-950 text-sm">Câu hỏi phụ & Thông tin nhận giải (Bắt buộc)</h4>
-                      <div>
-                        <label className="block text-xs font-semibold mb-1">
-                          Dự đoán có bao nhiêu người trả lời đúng 100% bộ câu hỏi kỳ này?
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          required
-                          value={compForm.predicted}
-                          onChange={(e) => setCompForm({ ...compForm, predicted: e.target.value })}
-                          placeholder="Ví dụ: 35"
-                          className="w-full border rounded-lg px-3 py-2 bg-white"
-                        />
-                      </div>
-                      <div className="grid md:grid-cols-3 gap-3">
-                        <input required value={compForm.full_name} onChange={(e) => setCompForm({ ...compForm, full_name: e.target.value })} placeholder="Họ và tên người thi" className="border rounded-lg px-3 py-2 bg-white text-sm" />
-                        <input required value={compForm.phone} onChange={(e) => setCompForm({ ...compForm, phone: e.target.value })} placeholder="Số điện thoại (Zalo)" className="border rounded-lg px-3 py-2 bg-white text-sm" />
-                        <input required value={compForm.commune} onChange={(e) => setCompForm({ ...compForm, commune: e.target.value })} placeholder="Xã / Phường" className="border rounded-lg px-3 py-2 bg-white text-sm" />
-                      </div>
-                    </div>
-
-                    <button type="submit" className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl">
-                      Gửi Bài Dự Thi & Dự Đoán
-                    </button>
-                  </form>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-gradient-to-r from-amber-600 to-orange-600 text-white p-6 rounded-2xl">
-                  <h2 className="text-xl font-bold">Đấu trường Kiến thức Nông dân Thi (Định kỳ Tháng)</h2>
-                  <p className="text-sm text-amber-100 mt-1">
-                    Trả lời đúng bộ câu hỏi chủ đề tháng và dự đoán sát số người trả lời đúng để nhận Voucher cá giống, cây giống, tài liệu kỹ thuật và thẻ cào.
-                  </p>
-                </div>
-                {competitions.length === 0 ? (
-                  <div className="bg-white p-8 rounded-xl border text-center text-gray-500">Hiện chưa có cuộc thi nào được mở.</div>
-                ) : (
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {competitions.map(c => {
-                      const expired = new Date(c.end_time) <= now;
-                      const prizeList = parsePrizes(c.prize_desc);
-                      return (
-                        <div key={c.id} className="bg-white p-5 rounded-xl border shadow-sm flex flex-col justify-between">
-                          <div>
-                            <div className="flex justify-between items-center gap-2">
-                              <span className={`text-xs px-2.5 py-0.5 rounded-full font-semibold ${expired ? 'bg-gray-200 text-gray-600' : 'bg-red-100 text-red-700'}`}>
-                                {formatCountdown(c.end_time)}
-                              </span>
-                              <button
-                                onClick={() => setQrModalTitle(c.title)}
-                                className="text-xs text-gray-600 hover:text-emerald-700 flex items-center gap-1"
-                              >
-                                <QrCode size={15} /> Mã QR
-                              </button>
-                            </div>
-                            <h3 className="font-bold text-lg mt-2">{c.title}</h3>
-                            <p className="text-xs text-gray-600 mt-1">Chủ đề: {c.theme}</p>
-                            <div className="mt-2.5 space-y-1 bg-amber-50/70 p-2.5 rounded-lg border border-amber-100">
-                              {prizeList.map((pz, i) => (
-                                <p key={i} className="text-xs text-emerald-900">
-                                  <strong>{pz.rank} ({pz.quantity}):</strong> {pz.value}
-                                </p>
-                              ))}
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => { setActiveComp(c); setCompAnswers({}); setCompResult(null); }}
-                            className={`mt-4 text-sm font-semibold py-2.5 rounded-lg text-white ${
-                              expired ? 'bg-gray-500' : 'bg-amber-600 hover:bg-amber-700'
-                            }`}
-                          >
-                            {expired ? 'Xem thông tin cuộc thi (Đã đóng)' : 'Tham gia dự thi ngay →'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'surveys' && (
-          <div>
-            {activeSurvey ? (
-              <div className="bg-white rounded-2xl border shadow-sm p-6 max-w-3xl mx-auto">
-                <button onClick={() => setActiveSurvey(null)} className="text-xs text-emerald-700 font-semibold mb-4">
-                  ← Danh sách các đợt khảo sát
-                </button>
-                <div className="flex justify-between items-start gap-4 mb-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-emerald-950">{activeSurvey.title}</h2>
-                    <p className="text-sm text-gray-600 mt-1">{activeSurvey.description}</p>
-                  </div>
-                  <span className="text-xs bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full font-semibold whitespace-nowrap">
-                    {formatCountdown(activeSurvey.end_time)}
-                  </span>
-                </div>
-
-                {surveySubmitted ? (
-                  <div className="bg-emerald-50 border border-emerald-300 p-6 rounded-xl text-center space-y-2">
-                    <CheckCircle size={40} className="text-emerald-700 mx-auto" />
-                    <h3 className="font-bold text-lg text-emerald-900">Cảm ơn bà con/cán bộ đã gửi phiếu khảo sát!</h3>
-                  </div>
-                ) : new Date(activeSurvey.end_time) <= now ? (
-                  <div className="bg-red-50 border border-red-200 p-6 rounded-xl text-center text-red-700 font-semibold">
-                    Đợt khảo sát này đã hết thời hạn tiếp nhận phiếu.
-                  </div>
-                ) : (
-                  <form onSubmit={handleSubmitSurvey} className="space-y-4">
-                    <div className="grid md:grid-cols-2 gap-3 bg-stone-50 p-4 rounded-xl border">
-                      <input
-                        value={surveyMeta.respondent_name}
-                        onChange={(e) => setSurveyMeta({ ...surveyMeta, respondent_name: e.target.value })}
-                        placeholder="Họ và tên (không bắt buộc)"
-                        className="border rounded-lg px-3 py-2 bg-white text-sm"
-                      />
-                      <input
-                        required
-                        value={surveyMeta.commune}
-                        onChange={(e) => setSurveyMeta({ ...surveyMeta, commune: e.target.value })}
-                        placeholder="Xã / Phường đang sinh sống (Bắt buộc)*"
-                        className="border rounded-lg px-3 py-2 bg-white text-sm"
-                      />
-                    </div>
-
-                    {(activeSurvey.questions || []).map((q, idx) => (
-                      <div key={q.id} className="p-4 border rounded-xl space-y-2">
-                        <p className="font-bold text-sm">
-                          Câu {idx + 1}: {q.label}{' '}
-                          {q.type === 'multi' && <span className="text-xs font-normal text-emerald-700">(Có thể chọn nhiều đáp án)</span>}
-                        </p>
-                        {q.type === 'choice' ? (
-                          <div className="space-y-1.5">
-                            {(q.options || []).map(opt => (
-                              <label key={opt} className="flex items-center gap-2 p-2 rounded hover:bg-emerald-50 cursor-pointer text-sm">
-                                <input
-                                  type="radio"
-                                  required
-                                  name={q.id}
-                                  checked={surveyAnswers[q.id] === opt}
-                                  onChange={() => handleSurveyAnswerChange(q.id, opt)}
-                                />
-                                <span>{opt}</span>
-                              </label>
-                            ))}
-                          </div>
-                        ) : q.type === 'multi' ? (
-                          <div className="space-y-1.5">
-                            {(q.options || []).map(opt => {
-                              const checked = Array.isArray(surveyAnswers[q.id]) && surveyAnswers[q.id].includes(opt);
-                              return (
-                                <label key={opt} className="flex items-center gap-2 p-2 rounded hover:bg-emerald-50 cursor-pointer text-sm">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() => handleSurveyMultiToggle(q.id, opt)}
-                                  />
-                                  <span>{opt}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <input
-                            required
-                            value={surveyAnswers[q.id] || ''}
-                            onChange={(e) => handleSurveyAnswerChange(q.id, e.target.value)}
-                            placeholder="Nhập câu trả lời hoặc số liệu..."
-                            className="w-full border rounded-lg px-3 py-2 text-sm"
+                        <div className="h-48 bg-emerald-100 overflow-hidden relative">
+                          <img
+                            src={
+                              article.image_url ||
+                              'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80'
+                            }
+                            alt={article.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                           />
-                        )}
+                          <span className="absolute top-3 left-3 bg-emerald-800/90 text-white text-xs font-semibold px-2.5 py-1 rounded-md">
+                            {article.category || 'Khuyến nông'}
+                          </span>
+                        </div>
+
+                        <div className="p-5 flex-1 flex flex-col">
+                          <h3 className="font-bold text-lg text-gray-900 group-hover:text-emerald-700 transition line-clamp-2">
+                            {article.title}
+                          </h3>
+                          <p className="text-sm text-gray-600 mt-2 line-clamp-3 flex-1">
+                            {article.summary}
+                          </p>
+
+                          <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between">
+                            <span className="text-xs text-gray-400">
+                              {article.created_at
+                                ? new Date(article.created_at).toLocaleDateString('vi-VN')
+                                : ''}
+                            </span>
+
+                            <button
+                              onClick={(e) => handleReadArticle(article, e)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                                isSpeaking && speakingArticleId === article.id
+                                  ? 'bg-rose-100 text-rose-700 hover:bg-rose-200'
+                                  : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                              }`}
+                            >
+                              {isSpeaking && speakingArticleId === article.id
+                                ? '⏹ Dừng đọc'
+                                : '🔊 Nghe đọc bài'}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ))}
-
-                    <button type="submit" className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-bold py-3 rounded-xl">
-                      Gửi Phiếu Khảo Sát
-                    </button>
-                  </form>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-emerald-900 text-white p-6 rounded-2xl">
-                  <h2 className="text-xl font-bold">Phiếu Khảo sát & Thu thập Nhu cầu Sản xuất</h2>
-                  <p className="text-sm text-emerald-100 mt-1">
-                    Hệ thống tự động lưu nháp trên điện thoại khi đang điền; cán bộ xã có thể tải Mã QR từng phiếu để gửi vào nhóm Zalo thôn bản.
-                  </p>
-                </div>
-                {surveys.length === 0 ? (
-                  <div className="bg-white p-8 rounded-xl border text-center text-gray-500">Hiện chưa có đợt khảo sát nào đang mở.</div>
-                ) : (
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {surveys.map(s => {
-                      const expired = new Date(s.end_time) <= now;
-                      return (
-                        <div key={s.id} className="bg-white p-5 rounded-xl border shadow-sm flex flex-col justify-between">
-                          <div>
-                            <div className="flex justify-between items-center gap-2">
-                              <span className={`text-xs px-2.5 py-0.5 rounded-full font-semibold ${expired ? 'bg-gray-200 text-gray-600' : 'bg-emerald-100 text-emerald-800'}`}>
-                                {formatCountdown(s.end_time)}
-                              </span>
-                              <button
-                                onClick={() => setQrModalTitle(s.title)}
-                                className="text-xs text-emerald-700 font-semibold flex items-center gap-1 hover:underline"
-                              >
-                                <QrCode size={15} /> Lấy mã QR Zalo
-                              </button>
-                            </div>
-                            <h3 className="font-bold text-lg mt-2">{s.title}</h3>
-                            <p className="text-xs text-gray-600 mt-1">{s.description}</p>
-                          </div>
-                          <button
-                            onClick={() => handleOpenSurvey(s)}
-                            className={`mt-4 text-sm font-semibold py-2.5 rounded-lg text-white ${
-                              expired ? 'bg-gray-500' : 'bg-emerald-700 hover:bg-emerald-800'
-                            }`}
-                          >
-                            {expired ? 'Đã hết hạn khảo sát' : 'Điền phiếu khảo sát →'}
-                          </button>
-                        </div>
-                      );
-                    })}
                   </div>
                 )}
               </div>
@@ -887,42 +519,96 @@ export default function HomePage() {
           </div>
         )}
 
+        {/* TAB 2: HỎI ĐÁP NHÀ NÔNG */}
         {activeTab === 'qa' && (
-          <div className="grid md:grid-cols-3 gap-6">
-            <form onSubmit={handleSendQa} className="bg-white p-5 rounded-xl border shadow-sm space-y-3 h-fit">
-              <h3 className="font-bold text-emerald-900">Gửi câu hỏi tới Kỹ sư Trung tâm</h3>
-              <p className="text-xs text-gray-500">Hỏi về kỹ thuật trồng trọt, chăn nuôi, phòng trị bệnh vật nuôi, giá giống...</p>
-              {qaSent && (
-                <div className="bg-emerald-50 text-emerald-800 text-xs p-3 rounded-lg">
-                  Đã gửi câu hỏi thành công! Kỹ sư chuyên môn sẽ trả lời và hiển thị công khai tại mục này.
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 h-fit">
+              <h2 className="text-xl font-bold text-emerald-900 mb-2">Gửi câu hỏi kỹ thuật</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Bà con gặp khó khăn về sâu bệnh cây trồng, dịch bệnh vật nuôi hãy gửi câu hỏi để kỹ sư giải đáp.
+              </p>
+              <form onSubmit={handleQuestionSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Họ và tên *</label>
+                  <input
+                    type="text"
+                    required
+                    value={newQuestion.full_name}
+                    onChange={(e) => setNewQuestion({ ...newQuestion, full_name: e.target.value })}
+                    placeholder="Ví dụ: Nông Văn A"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                  />
                 </div>
-              )}
-              <input required value={qaForm.asker_name} onChange={(e) => setQaForm({ ...qaForm, asker_name: e.target.value })} placeholder="Họ và tên của bạn" className="w-full border rounded-lg px-3 py-2 text-sm" />
-              <input required value={qaForm.commune} onChange={(e) => setQaForm({ ...qaForm, commune: e.target.value })} placeholder="Xã / Phường" className="w-full border rounded-lg px-3 py-2 text-sm" />
-              <textarea required rows={4} value={qaForm.question} onChange={(e) => setQaForm({ ...qaForm, question: e.target.value })} placeholder="Nhập nội dung cần tư vấn kỹ thuật..." className="w-full border rounded-lg px-3 py-2 text-sm" />
-              <button type="submit" className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-2.5 rounded-lg text-sm flex items-center justify-center gap-1.5">
-                <Send size={15} /> Gửi câu hỏi tư vấn
-              </button>
-            </form>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Xã / Phường</label>
+                  <input
+                    type="text"
+                    value={newQuestion.address}
+                    onChange={(e) => setNewQuestion({ ...newQuestion, address: e.target.value })}
+                    placeholder="Ví dụ: Xã Bạch Đằng, Cao Bằng"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Lĩnh vực</label>
+                  <select
+                    value={newQuestion.category}
+                    onChange={(e) => setNewQuestion({ ...newQuestion, category: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                  >
+                    <option value="Trồng trọt">Trồng trọt & Bảo vệ thực vật</option>
+                    <option value="Chăn nuôi">Chăn nuôi & Thú y</option>
+                    <option value="Lâm nghiệp">Lâm nghiệp</option>
+                    <option value="Thủy sản">Thủy sản</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nội dung câu hỏi *</label>
+                  <textarea
+                    rows="4"
+                    required
+                    value={newQuestion.content}
+                    onChange={(e) => setNewQuestion({ ...newQuestion, content: e.target.value })}
+                    placeholder="Mô tả triệu chứng cây trồng, vật nuôi hoặc vấn đề cần tư vấn..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={submittingQA}
+                  className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-2.5 rounded-lg transition"
+                >
+                  {submittingQA ? 'Đang gửi...' : 'Gửi câu hỏi tới Kỹ sư'}
+                </button>
+              </form>
+            </div>
 
-            <div className="md:col-span-2 space-y-4">
-              <h3 className="font-bold text-lg text-gray-800">Giải đáp kỹ thuật đã công bố ({qaList.length})</h3>
-              {qaList.length === 0 ? (
-                <div className="bg-white p-8 rounded-xl border text-center text-gray-500 text-sm">
-                  Chưa có câu hỏi nào được công bố.
+            <div className="lg:col-span-2 space-y-4">
+              <h2 className="text-xl font-bold text-gray-900">Câu hỏi & Tư vấn gần đây</h2>
+              {questions.length === 0 ? (
+                <div className="bg-white p-8 rounded-xl border border-gray-200 text-center text-gray-500">
+                  Chưa có câu hỏi nào. Hãy là người đầu tiên đặt câu hỏi cho cán bộ khuyến nông!
                 </div>
               ) : (
-                qaList.map(item => (
-                  <div key={item.id} className="bg-white p-5 rounded-xl border shadow-sm space-y-2.5">
-                    <div className="flex justify-between text-xs text-gray-500">
-                      <span>Người hỏi: <strong>{item.asker_name}</strong> ({item.commune})</span>
-                      <span>{new Date(item.created_at).toLocaleDateString('vi-VN')}</span>
+                questions.map((q) => (
+                  <div key={q.id} className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="font-bold text-gray-900">{q.full_name}</span>
+                      <span className="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-medium">
+                        {q.category}
+                      </span>
                     </div>
-                    <p className="font-semibold text-gray-900">Hỏi: {item.question}</p>
-                    {item.answer && (
-                      <div className="bg-emerald-50 border-l-4 border-emerald-700 p-3.5 rounded-r-lg text-sm text-emerald-950">
-                        <strong>Kỹ sư Khuyến nông trả lời:</strong> {item.answer}
+                    {q.address && <p className="text-xs text-gray-500 mb-2">Địa chỉ: {q.address}</p>}
+                    <p className="text-gray-800 text-sm bg-gray-50 p-3 rounded-lg">{q.content}</p>
+                    {q.answer ? (
+                      <div className="mt-3 bg-emerald-50 border-l-4 border-emerald-600 p-3 rounded-r-lg">
+                        <p className="text-xs font-bold text-emerald-800 mb-1">
+                          Phản hồi từ Trung tâm Khuyến nông:
+                        </p>
+                        <p className="text-sm text-gray-800 whitespace-pre-line">{q.answer}</p>
                       </div>
+                    ) : (
+                      <p className="text-xs text-amber-600 mt-2 italic">Đang chờ cán bộ kỹ thuật phản hồi...</p>
                     )}
                   </div>
                 ))
@@ -930,37 +616,153 @@ export default function HomePage() {
             </div>
           </div>
         )}
+
+        {/* TAB 3: KHẢO SÁT THỰC TẾ */}
+        {activeTab === 'survey' && (
+          <div className="max-w-3xl mx-auto space-y-6">
+            <h2 className="text-2xl font-bold text-emerald-900">Khảo sát nhu cầu sản xuất nông nghiệp</h2>
+            {surveys.length === 0 ? (
+              <div className="bg-white p-8 rounded-xl border border-gray-200 text-center text-gray-500">
+                Hiện chưa có phiếu khảo sát nào đang mở.
+              </div>
+            ) : (
+              surveys.map((survey) => {
+                const totalVotes = (survey.options || []).reduce((acc, o) => acc + (o.votes || 0), 0);
+                return (
+                  <div key={survey.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                    <h3 className="text-lg font-bold text-gray-900 mb-4">{survey.question}</h3>
+                    <div className="space-y-3">
+                      {(survey.options || []).map((opt, idx) => {
+                        const pct = totalVotes > 0 ? Math.round(((opt.votes || 0) / totalVotes) * 100) : 0;
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => handleVote(survey, idx)}
+                            disabled={votedSurveys[survey.id]}
+                            className="w-full text-left p-3 rounded-xl border border-gray-200 hover:border-emerald-500 transition relative overflow-hidden"
+                          >
+                            <div
+                              className="absolute inset-y-0 left-0 bg-emerald-100/70 transition-all duration-500"
+                              style={{ width: `${pct}%` }}
+                            />
+                            <div className="relative flex justify-between items-center text-sm font-medium">
+                              <span>{opt.label}</span>
+                              <span className="text-emerald-800 font-bold">
+                                {pct}% ({opt.votes || 0} phiếu)
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: ĐẤU TRƯỜNG NÔNG DÂN */}
+        {activeTab === 'quiz' && (
+          <div className="max-w-2xl mx-auto bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-gray-200">
+            <h2 className="text-2xl font-bold text-emerald-900 mb-2">Đấu trường Kiến thức Nhà nông</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              Thử tài hiểu biết về kỹ thuật trồng trọt, chăn nuôi và chính sách nông nghiệp Cao Bằng.
+            </p>
+
+            {quizFinished ? (
+              <div className="text-center py-6">
+                <p className="text-lg font-semibold text-gray-700">Bạn đã hoàn thành bộ câu hỏi!</p>
+                <p className="text-4xl font-extrabold text-emerald-700 my-4">
+                  {quizScore} / {quizData.length} điểm
+                </p>
+                <button
+                  onClick={() => {
+                    setQuizIndex(0);
+                    setQuizScore(0);
+                    setQuizAnswered(null);
+                    setQuizFinished(false);
+                  }}
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-2.5 rounded-lg font-semibold"
+                >
+                  Chơi lại từ đầu
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="flex justify-between text-xs font-semibold text-gray-500 mb-3">
+                  <span>
+                    Câu hỏi {quizIndex + 1} / {quizData.length}
+                  </span>
+                  <span>Điểm hiện tại: {quizScore}</span>
+                </div>
+                <h3 className="text-lg font-bold text-gray-900 mb-4">{quizData[quizIndex].question}</h3>
+                <div className="space-y-3">
+                  {quizData[quizIndex].options.map((opt, idx) => {
+                    let btnStyle = 'border-gray-200 hover:border-emerald-500 bg-white';
+                    if (quizAnswered !== null) {
+                      if (idx === quizData[quizIndex].answer) {
+                        btnStyle = 'border-emerald-600 bg-emerald-50 text-emerald-900 font-semibold';
+                      } else if (idx === quizAnswered) {
+                        btnStyle = 'border-rose-500 bg-rose-50 text-rose-900';
+                      }
+                    }
+
+                    return (
+                      <button
+                        key={idx}
+                        disabled={quizAnswered !== null}
+                        onClick={() => {
+                          setQuizAnswered(idx);
+                          if (idx === quizData[quizIndex].answer) {
+                            setQuizScore(quizScore + 1);
+                          }
+                        }}
+                        className={`w-full text-left p-4 rounded-xl border text-sm transition ${btnStyle}`}
+                      >
+                        {opt}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {quizAnswered !== null && (
+                  <div className="mt-6 flex justify-end">
+                    <button
+                      onClick={() => {
+                        if (quizIndex + 1 < quizData.length) {
+                          setQuizIndex(quizIndex + 1);
+                          setQuizAnswered(null);
+                        } else {
+                          setQuizFinished(true);
+                        }
+                      }}
+                      className="bg-emerald-700 hover:bg-emerald-800 text-white px-5 py-2 rounded-lg text-sm font-semibold"
+                    >
+                      {quizIndex + 1 < quizData.length ? 'Câu tiếp theo →' : 'Xem kết quả'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
-      {qrModalTitle && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={() => setQrModalTitle('')}>
-          <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center space-y-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-bold text-base text-emerald-950">{qrModalTitle}</h3>
-            <div className="bg-white p-4 border rounded-xl inline-block">
-              <QRCodeCanvas value={typeof window !== 'undefined' ? window.location.href : 'https://khuyennongcb.gov.vn'} size={190} />
-            </div>
-            <p className="text-xs text-gray-600">Chụp màn hình mã QR này gửi vào nhóm Zalo các xã/phường để bà con quét mở trực tiếp trên điện thoại.</p>
-            <button onClick={() => setQrModalTitle('')} className="w-full bg-emerald-700 text-white py-2 rounded-lg text-sm font-semibold">
-              Đóng cửa sổ
-            </button>
-          </div>
-        </div>
-      )}
-
-      <footer className="bg-emerald-950 text-emerald-200 text-xs mt-12">
-        <div className="max-w-6xl mx-auto px-4 py-6 flex flex-wrap justify-between items-center gap-4">
+      {/* Footer */}
+      <footer className="bg-emerald-950 text-emerald-200 text-sm py-8 mt-12">
+        <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-4">
           <div>
-            <p className="font-bold text-white uppercase">Trung tâm Khuyến nông và Giống Nông lâm nghiệp Cao Bằng</p>
-            <p className="mt-1">Hệ thống thông tin kỹ thuật, đào tạo trực tuyến và khảo sát nông nghiệp tỉnh Cao Bằng.</p>
+            <p className="font-bold text-white">
+              TRUNG TÂM KHUYẾN NÔNG VÀ GIỐNG NÔNG LÂM NGHIỆP TỈNH CAO BẰNG
+            </p>
+            <p className="text-xs text-emerald-300 mt-1">
+              Trụ sở: Tổ dân phố Phan Thanh, Phường Thục Phán, Tỉnh Cao Bằng
+            </p>
           </div>
-          <div className="flex items-center gap-6">
-            <span className="bg-emerald-900 px-3 py-1.5 rounded-lg border border-emerald-800">
-              Tổng lượt truy cập: <strong className="text-amber-400">{totalVisits.toLocaleString('vi-VN')}</strong>
-            </span>
-            <Link href="/admin" className="text-emerald-400 hover:text-white inline-flex items-center gap-1">
-              <Lock size={13} /> Cổng Quản trị Cán bộ
-            </Link>
-          </div>
+          <p className="text-xs text-emerald-400">
+            © {new Date().getFullYear()} Cổng Thông tin & Tương tác Khuyến nông Cao Bằng
+          </p>
         </div>
       </footer>
     </div>
