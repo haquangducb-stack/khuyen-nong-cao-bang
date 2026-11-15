@@ -52,6 +52,7 @@ export default function HomePage() {
   const [qaList, setQaList] = useState([]);
   const [qaForm, setQaForm] = useState({ asker_name: '', commune: '', question: '' });
   const [qaSent, setQaSent] = useState(false);
+  const [draftingQa, setDraftingQa] = useState(false);
 
   const [now, setNow] = useState(null);
 
@@ -340,6 +341,34 @@ export default function HomePage() {
       setQaForm({ asker_name: '', commune: '', question: '' });
     }
   };
+
+  const handleAiDraftQa = async () => {
+  if (!qaForm.question.trim()) {
+    alert('Bà con hãy gõ vài từ khóa ngắn gọn (ví dụ: "lúa bị vàng lá", "lợn con tiêu chảy") vào ô nội dung trước rồi bấm nút AI soạn giúp!');
+    return;
+  }
+  setDraftingQa(true);
+  try {
+    const res = await fetch('/api/draft-qa', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rawText: qaForm.question,
+        commune: qaForm.commune,
+      }),
+    });
+    const data = await res.json();
+    if (data.draftedQuestion) {
+      setQaForm({ ...qaForm, question: data.draftedQuestion });
+    } else {
+      alert('Không thể soạn tự động: ' + (data.error || 'Vui lòng thử lại'));
+    }
+  } catch (err) {
+    alert('Lỗi kết nối trợ lý AI.');
+  } finally {
+    setDraftingQa(false);
+  }
+};
 
   const filteredPosts = posts.filter(p => {
     if (selectedGroup === 'Tất cả') return true;
@@ -953,7 +982,24 @@ export default function HomePage() {
               )}
               <input required value={qaForm.asker_name} onChange={(e) => setQaForm({ ...qaForm, asker_name: e.target.value })} placeholder="Họ và tên của bạn" className="w-full border rounded-lg px-3 py-2 text-sm" />
               <input required value={qaForm.commune} onChange={(e) => setQaForm({ ...qaForm, commune: e.target.value })} placeholder="Xã / Phường" className="w-full border rounded-lg px-3 py-2 text-sm" />
-              <textarea required rows={4} value={qaForm.question} onChange={(e) => setQaForm({ ...qaForm, question: e.target.value })} placeholder="Nhập nội dung cần tư vấn kỹ thuật..." className="w-full border rounded-lg px-3 py-2 text-sm" />
+              <div className="space-y-1.5">
+  <textarea
+    required
+    rows={4}
+    value={qaForm.question}
+    onChange={(e) => setQaForm({ ...qaForm, question: e.target.value })}
+    placeholder="Gõ ngắn gọn vấn đề (VD: ngô bị sâu đục thân) rồi bấm nút AI bên dưới để viết thành câu hỏi đầy đủ..."
+    className="w-full border rounded-lg px-3 py-2 text-sm"
+  />
+  <button
+    type="button"
+    onClick={handleAiDraftQa}
+    disabled={draftingQa}
+    className="w-full bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition"
+  >
+    {draftingQa ? '⏳ AI (Gemini 3.8) đang viết giúp câu hỏi...' : '✨ Nhờ AI viết thành câu hỏi kỹ thuật rõ ràng'}
+  </button>
+</div>
               <button type="submit" className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-2.5 rounded-lg text-sm flex items-center justify-center gap-1.5">
                 <Send size={15} /> Gửi câu hỏi tư vấn
               </button>
