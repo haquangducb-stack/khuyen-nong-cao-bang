@@ -63,8 +63,7 @@ Yêu cầu: Trả lời trực tiếp, thân thiện, dễ áp dụng với đi�
 
     // Danh sách model ưu tiên từ nhanh nhất đến dự phòng khi quá tải
     const candidateModels = [
-      'gemini-3.8-flash',
-      'gemini-3.8-flash-lite'
+      'gemini-3.8-flash'
     ];
 
     let rawText = '';
