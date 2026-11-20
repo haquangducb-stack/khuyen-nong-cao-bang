@@ -6,7 +6,8 @@ import * as XLSX from 'xlsx';
 import {
   Lock, LogOut, FileText, BookOpen, Trophy, ClipboardList,
   MessageSquare, Plus, Trash2, Edit3, RefreshCw, Image as ImageIcon,
-  Video, Download, Printer, CheckCircle, ArrowLeft, Sparkles, Award
+  Video, Download, Printer, CheckCircle, ArrowLeft, Sparkles, Award,
+  BarChart3, Upload, PlayCircle, Presentation, Eye
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -30,9 +31,18 @@ export default function AdminPage() {
 
   const [posts, setPosts] = useState([]);
   const [studyTopics, setStudyTopics] = useState([]);
+  const [studyDocs, setStudyDocs] = useState([]);
   const [competitions, setCompetitions] = useState([]);
   const [surveys, setSurveys] = useState([]);
   const [qaList, setQaList] = useState([]);
+
+  // Dữ liệu thống kê theo tháng
+  const [totalSiteVisits, setTotalSiteVisits] = useState(0);
+  const [activityLogs, setActivityLogs] = useState([]);
+  const [compEntries, setCompEntries] = useState([]);
+  const [surveyResponses, setSurveyResponses] = useState([]);
+  const [statsYear, setStatsYear] = useState(new Date().getFullYear());
+  const [chartMetric, setChartMetric] = useState('all'); // 'all' | 'visit' | 'post_view' | 'study' | 'comp'
 
   // Tab 1: Bài viết
   const [editingPostId, setEditingPostId] = useState(null);
@@ -46,7 +56,8 @@ export default function AdminPage() {
   const [scannedArticles, setScannedArticles] = useState([]);
   const [selectedScanned, setSelectedScanned] = useState({});
 
-  // Tab 2: Chuyên đề học tập
+  // Tab 2: Chuyên đề học tập + Tài liệu/Video
+  const [studyAdminSub, setStudyAdminSub] = useState('quiz'); // 'quiz' | 'docs'
   const [editingTopicId, setEditingTopicId] = useState(null);
   const [topicTitle, setTopicTitle] = useState('');
   const [topicDesc, setTopicDesc] = useState('');
@@ -55,6 +66,15 @@ export default function AdminPage() {
   ]);
   const [aiStudyPrompt, setAiStudyPrompt] = useState('');
   const [aiStudyCount, setAiStudyCount] = useState(5);
+
+  // Form tải lên Tài liệu (Word, PDF, PPT) & Video bài giảng
+  const [docTitle, setDocTitle] = useState('');
+  const [docCategory, setDocCategory] = useState('Chăn nuôi - Thú y');
+  const [docDesc, setDocDesc] = useState('');
+  const [docMode, setDocMode] = useState('file'); // 'file' | 'youtube'
+  const [docYoutubeUrl, setDocYoutubeUrl] = useState('');
+  const [docFile, setDocFile] = useState(null);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
 
   // Tab 3: Cuộc thi tháng
   const [editingCompId, setEditingCompId] = useState(null);
@@ -105,18 +125,28 @@ export default function AdminPage() {
   }, []);
 
   const fetchAllData = async () => {
-    const [p, st, c, sv, qa] = await Promise.all([
+    const [p, st, docs, c, sv, qa, stats, logs, entries, resps] = await Promise.all([
       supabase.from('posts').select('*').order('created_at', { ascending: false }),
       supabase.from('study_topics').select('*').order('created_at', { ascending: false }),
+      supabase.from('study_documents').select('*').order('created_at', { ascending: false }),
       supabase.from('competitions').select('*').order('created_at', { ascending: false }),
       supabase.from('surveys').select('*').order('created_at', { ascending: false }),
       supabase.from('qa_questions').select('*').order('created_at', { ascending: false }),
+      supabase.from('site_stats').select('visits').eq('id', 'home').single(),
+      supabase.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(10000),
+      supabase.from('competition_entries').select('id, submitted_at, created_at'),
+      supabase.from('survey_responses').select('id, submitted_at, created_at')
     ]);
     if (p.data) setPosts(p.data);
     if (st.data) setStudyTopics(st.data);
+    if (docs.data) setStudyDocs(docs.data);
     if (c.data) setCompetitions(c.data);
     if (sv.data) setSurveys(sv.data);
     if (qa.data) setQaList(qa.data);
+    if (stats.data) setTotalSiteVisits(Number(stats.data.visits || 0));
+    if (logs.data) setActivityLogs(logs.data);
+    if (entries.data) setCompEntries(entries.data);
+    if (resps.data) setSurveyResponses(resps.data);
   };
 
   // Hàm gọi API AI nội bộ
@@ -308,6 +338,73 @@ export default function AdminPage() {
     alert('Đã lưu chuyên đề!');
   };
 
+  // --- TẢI LÊN TÀI LIỆU (WORD, PDF, PPT) & VIDEO BÀI GIẢNG ---
+  const handleSaveStudyDocument = async (e) => {
+    e.preventDefault();
+    if (!docTitle.trim()) return alert('Vui lòng nhập tiêu đề tài liệu hoặc video!');
+
+    if (docMode === 'youtube') {
+      if (!docYoutubeUrl.trim()) return alert('Vui lòng dán đường link YouTube!');
+      const { error } = await supabase.from('study_documents').insert([{
+        title: docTitle.trim(),
+        category: docCategory,
+        description: docDesc.trim(),
+        file_url: docYoutubeUrl.trim(),
+        file_type: 'youtube'
+      }]);
+      if (error) return alert('Lỗi lưu video: ' + error.message);
+      setDocTitle('');
+      setDocDesc('');
+      setDocYoutubeUrl('');
+      fetchAllData();
+      alert('Đã đăng Video bài giảng lên mục Nông dân học tập!');
+      return;
+    }
+
+    if (!docFile) return alert('Vui lòng chọn tệp Word (.doc/.docx), PDF (.pdf), PowerPoint (.ppt/.pptx) hoặc Video (.mp4)!');
+    const ext = docFile.name.split('.').pop()?.toLowerCase() || '';
+    const allowed = ['doc', 'docx', 'pdf', 'ppt', 'pptx', 'mp4', 'webm'];
+    if (!allowed.includes(ext)) {
+      return alert('Chỉ hỗ trợ định dạng Word (.doc, .docx), PDF (.pdf), PowerPoint (.ppt, .pptx) hoặc Video (.mp4)!');
+    }
+
+    setUploadingDoc(true);
+    try {
+      const safeName = `${Date.now()}_${docFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+      const { error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(safeName, docFile, { cacheControl: '3600', upsert: false });
+
+      if (uploadError) {
+        setUploadingDoc(false);
+        return alert('Lỗi tải tệp lên Supabase Storage (kiểm tra đã tạo bucket "documents" Public chưa): ' + uploadError.message);
+      }
+
+      const { data: publicUrlData } = supabase.storage.from('documents').getPublicUrl(safeName);
+      const fileType = ['mp4', 'webm'].includes(ext) ? 'video' : ext;
+
+      const { error: dbError } = await supabase.from('study_documents').insert([{
+        title: docTitle.trim(),
+        category: docCategory,
+        description: docDesc.trim(),
+        file_url: publicUrlData.publicUrl,
+        file_type: fileType
+      }]);
+
+      setUploadingDoc(false);
+      if (dbError) return alert('Lỗi lưu thông tin tài liệu: ' + dbError.message);
+
+      setDocTitle('');
+      setDocDesc('');
+      setDocFile(null);
+      fetchAllData();
+      alert('Đã tải lên tài liệu thành công! Bà con có thể đọc trực tiếp ngay trên web.');
+    } catch (err) {
+      setUploadingDoc(false);
+      alert('Lỗi hệ thống khi tải tệp: ' + err.message);
+    }
+  };
+
   // --- AI TẠO ĐỀ THI THÁNG ---
   const handleAiGenerateComp = async () => {
     const topic = compTheme.trim() || compTitle.trim();
@@ -451,6 +548,69 @@ export default function AdminPage() {
     alert('Đã thêm và công khai mục Hỏi đáp mẫu!');
   };
 
+  // --- TÍNH TOÁN SỐ LIỆU THỐNG KÊ THEO 12 THÁNG ---
+  const monthlyStats = Array.from({ length: 12 }, (_, mIdx) => {
+    const isSameMonthYear = (dateStr) => {
+      if (!dateStr) return false;
+      const d = new Date(dateStr);
+      return d.getFullYear() === statsYear && d.getMonth() === mIdx;
+    };
+
+    const visits = activityLogs.filter(l => l.action_type === 'visit' && isSameMonthYear(l.created_at)).length;
+    const postViews = activityLogs.filter(l => l.action_type === 'post_view' && isSameMonthYear(l.created_at)).length;
+    const docViews = activityLogs.filter(l => l.action_type === 'doc_view' && isSameMonthYear(l.created_at)).length;
+    const studyCompletes = activityLogs.filter(l => l.action_type === 'study_complete' && isSameMonthYear(l.created_at)).length;
+    const compSubmits = compEntries.filter(c => isSameMonthYear(c.submitted_at || c.created_at)).length;
+    const surveySubmits = surveyResponses.filter(s => isSameMonthYear(s.submitted_at || s.created_at)).length;
+    const qaCount = qaList.filter(q => isSameMonthYear(q.created_at)).length;
+
+    const total = visits + postViews + docViews + studyCompletes + compSubmits + surveySubmits;
+    return {
+      month: mIdx + 1,
+      visits,
+      postViews,
+      docViews,
+      studyCompletes,
+      compSubmits,
+      surveySubmits,
+      qaCount,
+      total
+    };
+  });
+
+  const totalAllPostViews = posts.reduce((sum, p) => sum + Number(p.views || 0), 0);
+  const totalAllDocViews = studyDocs.reduce((sum, d) => sum + Number(d.views || 0), 0);
+  const totalAllStudyQuiz = activityLogs.filter(l => l.action_type === 'study_complete').length;
+
+  const exportAnnualStatsExcel = () => {
+    const rows = monthlyStats.map(m => ({
+      'Tháng': `Tháng ${m.month}/${statsYear}`,
+      'Lượt truy cập Cổng': m.visits,
+      'Lượt xem Tin & Kỹ thuật': m.postViews,
+      'Lượt đọc Tài liệu & Video': m.docViews,
+      'Lượt hoàn thành Ôn tập': m.studyCompletes,
+      'Lượt nộp bài Thi tháng': m.compSubmits,
+      'Phiếu Khảo sát thu về': m.surveySubmits,
+      'Câu hỏi tư vấn gửi về': m.qaCount,
+      'Tổng lượt tương tác': m.total
+    }));
+    rows.push({
+      'Tháng': `TỔNG CẢ NĂM ${statsYear}`,
+      'Lượt truy cập Cổng': monthlyStats.reduce((a, b) => a + b.visits, 0),
+      'Lượt xem Tin & Kỹ thuật': monthlyStats.reduce((a, b) => a + b.postViews, 0),
+      'Lượt đọc Tài liệu & Video': monthlyStats.reduce((a, b) => a + b.docViews, 0),
+      'Lượt hoàn thành Ôn tập': monthlyStats.reduce((a, b) => a + b.studyCompletes, 0),
+      'Lượt nộp bài Thi tháng': monthlyStats.reduce((a, b) => a + b.compSubmits, 0),
+      'Phiếu Khảo sát thu về': monthlyStats.reduce((a, b) => a + b.surveySubmits, 0),
+      'Câu hỏi tư vấn gửi về': monthlyStats.reduce((a, b) => a + b.qaCount, 0),
+      'Tổng lượt tương tác': monthlyStats.reduce((a, b) => a + b.total, 0)
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `ThongKe_${statsYear}`);
+    XLSX.writeFile(wb, `BaoCao_HoatDong_CongKhuyenNong_${statsYear}.xlsx`);
+  };
+
   if (loadingAuth) return <div className="p-10 text-center">Đang tải...</div>;
 
   if (!session) {
@@ -487,6 +647,15 @@ export default function AdminPage() {
     return true;
   });
 
+  const getChartValue = (m) => {
+    if (chartMetric === 'visit') return m.visits;
+    if (chartMetric === 'post_view') return m.postViews;
+    if (chartMetric === 'study') return m.docViews + m.studyCompletes;
+    if (chartMetric === 'comp') return m.compSubmits + m.surveySubmits;
+    return m.total;
+  };
+  const maxChartVal = Math.max(...monthlyStats.map(getChartValue), 1);
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-800">
       <header className="bg-emerald-900 text-white px-6 py-4 flex justify-between items-center print:hidden">
@@ -505,16 +674,17 @@ export default function AdminPage() {
       <nav className="bg-white border-b px-6 flex gap-2 overflow-x-auto print:hidden">
         {[
           { id: 'posts', label: '1. Bài viết & AI Biên tập', icon: FileText },
-          { id: 'study', label: '2. Nông dân học tập', icon: BookOpen },
+          { id: 'study', label: '2. Nông dân học tập & Tài liệu', icon: BookOpen },
           { id: 'comp', label: '3. Nông dân thi (Tháng)', icon: Trophy },
           { id: 'surveys', label: '4. Khảo sát & Báo cáo', icon: ClipboardList },
-          { id: 'qa', label: `5. Hỏi đáp (${pendingQa} chờ)`, icon: MessageSquare }
+          { id: 'qa', label: `5. Hỏi đáp (${pendingQa} chờ)`, icon: MessageSquare },
+          { id: 'stats', label: '6. Thống kê & Biểu đồ', icon: BarChart3 }
         ].map(t => (
           <button
             key={t.id}
             onClick={() => setActiveTab(t.id)}
             className={`py-3 px-4 text-sm font-medium border-b-2 flex items-center gap-2 whitespace-nowrap ${
-              activeTab === t.id ? 'border-emerald-700 text-emerald-800' : 'border-transparent text-gray-500'
+              activeTab === t.id ? 'border-emerald-700 text-emerald-800 font-bold' : 'border-transparent text-gray-500'
             }`}
           >
             <t.icon size={16} /> {t.label}
@@ -694,79 +864,223 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* TAB 2: NÔNG DÂN HỌC TẬP + AI TẠO BỘ CÂU HỎI */}
+        {/* TAB 2: NÔNG DÂN HỌC TẬP (TRẮC NGHIỆM + TÀI LIỆU WORD/PDF/PPT & VIDEO) */}
         {activeTab === 'study' && (
           <div className="space-y-6">
-            <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-xl flex flex-wrap items-center gap-3">
-              <Sparkles className="text-indigo-700 shrink-0" size={20} />
-              <input
-                value={aiStudyPrompt}
-                onChange={(e) => setAiStudyPrompt(e.target.value)}
-                placeholder="Nhập chủ đề để AI tự soạn bộ câu hỏi (VD: Kỹ thuật ươm cá chép qua đông ở Cao Bằng)..."
-                className="flex-1 border rounded-lg px-3 py-2 bg-white text-sm"
-              />
-              <select value={aiStudyCount} onChange={(e) => setAiStudyCount(Number(e.target.value))} className="border rounded-lg px-3 py-2 bg-white text-sm">
-                <option value={5}>5 câu</option>
-                <option value={10}>10 câu</option>
-              </select>
+            <div className="flex gap-2 bg-white p-2 rounded-xl border w-fit">
               <button
                 type="button"
-                onClick={handleAiGenerateStudy}
-                disabled={aiLoading === 'gen_study'}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-semibold"
+                onClick={() => setStudyAdminSub('quiz')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${
+                  studyAdminSub === 'quiz' ? 'bg-emerald-800 text-white' : 'text-gray-600 hover:bg-gray-100'
+                }`}
               >
-                {aiLoading === 'gen_study' ? 'AI đang soạn đề...' : 'AI Tạo bộ câu hỏi'}
+                <BookOpen size={16} /> 1. Bộ câu hỏi trắc nghiệm ({studyTopics.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setStudyAdminSub('docs')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${
+                  studyAdminSub === 'docs' ? 'bg-emerald-800 text-white' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                <FileText size={16} /> 2. Tài liệu Word / PDF / PPT & Video ({studyDocs.length})
               </button>
             </div>
 
-            <form onSubmit={handleSaveTopic} className="bg-white p-6 rounded-xl shadow-sm border space-y-4">
-              <h2 className="font-bold text-lg text-emerald-900">{editingTopicId ? 'Sửa chuyên đề' : 'Thêm Chuyên đề Nông dân học tập'}</h2>
-              <input required value={topicTitle} onChange={(e) => setTopicTitle(e.target.value)} placeholder="Tên chuyên đề..." className="w-full border rounded-lg px-3 py-2" />
-              <input value={topicDesc} onChange={(e) => setTopicDesc(e.target.value)} placeholder="Mô tả ngắn chuyên đề" className="w-full border rounded-lg px-3 py-2" />
+            {studyAdminSub === 'quiz' ? (
+              <>
+                <div className="bg-indigo-50 border border-indigo-200 p-4 rounded-xl flex flex-wrap items-center gap-3">
+                  <Sparkles className="text-indigo-700 shrink-0" size={20} />
+                  <input
+                    value={aiStudyPrompt}
+                    onChange={(e) => setAiStudyPrompt(e.target.value)}
+                    placeholder="Nhập chủ đề để AI tự soạn bộ câu hỏi (VD: Kỹ thuật ươm cá chép qua đông ở Cao Bằng)..."
+                    className="flex-1 border rounded-lg px-3 py-2 bg-white text-sm"
+                  />
+                  <select value={aiStudyCount} onChange={(e) => setAiStudyCount(Number(e.target.value))} className="border rounded-lg px-3 py-2 bg-white text-sm">
+                    <option value={5}>5 câu</option>
+                    <option value={10}>10 câu</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleAiGenerateStudy}
+                    disabled={aiLoading === 'gen_study'}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-semibold"
+                  >
+                    {aiLoading === 'gen_study' ? 'AI đang soạn đề...' : 'AI Tạo bộ câu hỏi'}
+                  </button>
+                </div>
 
-              {topicQuestions.map((item, idx) => (
-                <div key={idx} className="p-4 bg-gray-50 rounded-lg border space-y-2">
-                  <div className="flex justify-between">
-                    <span className="font-semibold text-sm">Câu {idx + 1}</span>
-                    {topicQuestions.length > 1 && (
-                      <button type="button" onClick={() => setTopicQuestions(topicQuestions.filter((_, i) => i !== idx))} className="text-red-600 text-xs">Xóa câu</button>
-                    )}
-                  </div>
-                  <input required value={item.q} onChange={(e) => { const copy = [...topicQuestions]; copy[idx].q = e.target.value; setTopicQuestions(copy); }} placeholder="Nội dung câu hỏi..." className="w-full border rounded px-3 py-1.5 bg-white" />
-                  <div className="grid md:grid-cols-2 gap-2">
-                    {item.options.map((opt, oIdx) => (
-                      <div key={oIdx} className="flex items-center gap-2">
-                        <input type="radio" checked={item.answer === oIdx} onChange={() => { const copy = [...topicQuestions]; copy[idx].answer = oIdx; setTopicQuestions(copy); }} />
-                        <input required value={opt} onChange={(e) => { const copy = [...topicQuestions]; copy[idx].options[oIdx] = e.target.value; setTopicQuestions(copy); }} placeholder={`Đáp án ${oIdx + 1}`} className="flex-1 border rounded px-2 py-1 bg-white text-sm" />
+                <form onSubmit={handleSaveTopic} className="bg-white p-6 rounded-xl shadow-sm border space-y-4">
+                  <h2 className="font-bold text-lg text-emerald-900">{editingTopicId ? 'Sửa chuyên đề' : 'Thêm Chuyên đề Nông dân học tập'}</h2>
+                  <input required value={topicTitle} onChange={(e) => setTopicTitle(e.target.value)} placeholder="Tên chuyên đề..." className="w-full border rounded-lg px-3 py-2" />
+                  <input value={topicDesc} onChange={(e) => setTopicDesc(e.target.value)} placeholder="Mô tả ngắn chuyên đề" className="w-full border rounded-lg px-3 py-2" />
+
+                  {topicQuestions.map((item, idx) => (
+                    <div key={idx} className="p-4 bg-gray-50 rounded-lg border space-y-2">
+                      <div className="flex justify-between">
+                        <span className="font-semibold text-sm">Câu {idx + 1}</span>
+                        {topicQuestions.length > 1 && (
+                          <button type="button" onClick={() => setTopicQuestions(topicQuestions.filter((_, i) => i !== idx))} className="text-red-600 text-xs">Xóa câu</button>
+                        )}
                       </div>
-                    ))}
-                  </div>
-                  <input value={item.explain} onChange={(e) => { const copy = [...topicQuestions]; copy[idx].explain = e.target.value; setTopicQuestions(copy); }} placeholder="Giải thích kỹ thuật sau khi chọn đáp án..." className="w-full border rounded px-3 py-1.5 bg-white text-sm" />
-                </div>
-              ))}
+                      <input required value={item.q} onChange={(e) => { const copy = [...topicQuestions]; copy[idx].q = e.target.value; setTopicQuestions(copy); }} placeholder="Nội dung câu hỏi..." className="w-full border rounded px-3 py-1.5 bg-white" />
+                      <div className="grid md:grid-cols-2 gap-2">
+                        {item.options.map((opt, oIdx) => (
+                          <div key={oIdx} className="flex items-center gap-2">
+                            <input type="radio" checked={item.answer === oIdx} onChange={() => { const copy = [...topicQuestions]; copy[idx].answer = oIdx; setTopicQuestions(copy); }} />
+                            <input required value={opt} onChange={(e) => { const copy = [...topicQuestions]; copy[idx].options[oIdx] = e.target.value; setTopicQuestions(copy); }} placeholder={`Đáp án ${oIdx + 1}`} className="flex-1 border rounded px-2 py-1 bg-white text-sm" />
+                          </div>
+                        ))}
+                      </div>
+                      <input value={item.explain} onChange={(e) => { const copy = [...topicQuestions]; copy[idx].explain = e.target.value; setTopicQuestions(copy); }} placeholder="Giải thích kỹ thuật sau khi chọn đáp án..." className="w-full border rounded px-3 py-1.5 bg-white text-sm" />
+                    </div>
+                  ))}
 
-              <div className="flex gap-3">
-                <button type="button" onClick={() => setTopicQuestions([...topicQuestions, { q: '', options: ['', '', '', ''], answer: 0, explain: '' }])} className="bg-gray-200 px-4 py-2 rounded-lg text-sm flex items-center gap-1">
-                  <Plus size={16} /> Thêm câu hỏi
-                </button>
-                <button type="submit" className="bg-emerald-700 text-white px-6 py-2 rounded-lg font-semibold">Lưu Chuyên đề</button>
+                  <div className="flex gap-3">
+                    <button type="button" onClick={() => setTopicQuestions([...topicQuestions, { q: '', options: ['', '', '', ''], answer: 0, explain: '' }])} className="bg-gray-200 px-4 py-2 rounded-lg text-sm flex items-center gap-1">
+                      <Plus size={16} /> Thêm câu hỏi
+                    </button>
+                    <button type="submit" className="bg-emerald-700 text-white px-6 py-2 rounded-lg font-semibold">Lưu Chuyên đề</button>
+                  </div>
+                </form>
+
+                <div className="bg-white rounded-xl shadow-sm border divide-y">
+                  {studyTopics.map(t => (
+                    <div key={t.id} className="p-4 flex justify-between items-center">
+                      <div>
+                        <h4 className="font-bold">{t.title}</h4>
+                        <p className="text-xs text-gray-500">{t.questions?.length || 0} câu hỏi • {t.description}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => { setEditingTopicId(t.id); setTopicTitle(t.title); setTopicDesc(t.description || ''); setTopicQuestions(t.questions || []); }} className="p-2 text-blue-600"><Edit3 size={18} /></button>
+                        <button onClick={async () => { if (confirm('Xóa chuyên đề này?')) { await supabase.from('study_topics').delete().eq('id', t.id); fetchAllData(); } }} className="p-2 text-red-600"><Trash2 size={18} /></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              /* QUẢN LÝ TÀI LIỆU WORD, PDF, PPT VÀ VIDEO BÀI GIẢNG */
+              <div className="space-y-6">
+                <form onSubmit={handleSaveStudyDocument} className="bg-white p-6 rounded-xl shadow-sm border space-y-4">
+                  <h2 className="font-bold text-lg text-emerald-900">Tải lên Giáo trình (Word, PDF, PowerPoint) hoặc Video bài giảng</h2>
+                  <p className="text-xs text-gray-500">
+                    Bà con truy cập mục Nông dân học tập có thể bấm đọc trực tiếp trang trình chiếu PPT, tài liệu Word, PDF và xem Video ngay trên điện thoại mà không cần tải file về máy.
+                  </p>
+
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <input
+                      required
+                      value={docTitle}
+                      onChange={(e) => setDocTitle(e.target.value)}
+                      placeholder="Tên tài liệu / bài giảng (VD: Slide Tập huấn phòng chống dịch tả lợn Châu Phi)..."
+                      className="border rounded-lg px-3 py-2 text-sm"
+                    />
+                    <select value={docCategory} onChange={(e) => setDocCategory(e.target.value)} className="border rounded-lg px-3 py-2 bg-white text-sm">
+                      <option value="Chăn nuôi - Thú y">Chăn nuôi - Thú y</option>
+                      <option value="Trồng trọt - Lâm nghiệp">Trồng trọt - Lâm nghiệp</option>
+                      <option value="Thủy sản">Thủy sản</option>
+                      <option value="Video thực hành">Video thực hành</option>
+                    </select>
+                  </div>
+
+                  <input
+                    value={docDesc}
+                    onChange={(e) => setDocDesc(e.target.value)}
+                    placeholder="Tóm tắt ngắn nội dung tài liệu / bài giảng (không bắt buộc)..."
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                  />
+
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDocMode('file')}
+                      className={`px-4 py-2 rounded-lg text-xs font-bold border flex items-center gap-1.5 ${
+                        docMode === 'file' ? 'bg-emerald-50 border-emerald-600 text-emerald-900' : 'bg-white text-gray-600'
+                      }`}
+                    >
+                      <Upload size={15} /> Tải tệp từ máy tính (Word / PDF / PPT / MP4)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDocMode('youtube')}
+                      className={`px-4 py-2 rounded-lg text-xs font-bold border flex items-center gap-1.5 ${
+                        docMode === 'youtube' ? 'bg-red-50 border-red-600 text-red-900' : 'bg-white text-gray-600'
+                      }`}
+                    >
+                      <PlayCircle size={15} /> Dán link Video YouTube
+                    </button>
+                  </div>
+
+                  {docMode === 'file' ? (
+                    <div className="p-4 bg-stone-50 border-2 border-dashed border-emerald-300 rounded-xl">
+                      <input
+                        type="file"
+                        accept=".doc,.docx,.pdf,.ppt,.pptx,.mp4,.webm"
+                        onChange={(e) => setDocFile(e.target.files?.[0] || null)}
+                        className="text-sm"
+                      />
+                      <p className="text-[11px] text-gray-500 mt-1.5">
+                        Hỗ trợ định dạng: <strong>.doc, .docx</strong> (Word), <strong>.pdf</strong>, <strong>.ppt, .pptx</strong> (PowerPoint), <strong>.mp4</strong> (Video).
+                      </p>
+                    </div>
+                  ) : (
+                    <input
+                      required
+                      value={docYoutubeUrl}
+                      onChange={(e) => setDocYoutubeUrl(e.target.value)}
+                      placeholder="Dán đường dẫn video YouTube (VD: https://www.youtube.com/watch?v=...)"
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
+                    />
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={uploadingDoc}
+                    className="bg-emerald-700 hover:bg-emerald-800 text-white px-6 py-2.5 rounded-lg text-sm font-semibold"
+                  >
+                    {uploadingDoc ? '⏳ Đang tải tệp lên hệ thống...' : 'Đăng lên Thư viện Học tập'}
+                  </button>
+                </form>
+
+                <div className="bg-white rounded-xl shadow-sm border divide-y">
+                  {studyDocs.length === 0 ? (
+                    <div className="p-6 text-center text-gray-500 text-sm">Chưa có tài liệu hoặc video nào được đăng.</div>
+                  ) : (
+                    studyDocs.map(d => (
+                      <div key={d.id} className="p-4 flex justify-between items-center gap-4">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-bold uppercase bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                              {d.file_type}
+                            </span>
+                            <span className="text-xs text-gray-500">{d.category}</span>
+                            <span className="text-xs text-amber-700 font-semibold flex items-center gap-1">
+                              <Eye size={13} /> {d.views || 0} lượt xem
+                            </span>
+                          </div>
+                          <h4 className="font-bold text-gray-900 mt-1">{d.title}</h4>
+                          {d.description && <p className="text-xs text-gray-500">{d.description}</p>}
+                        </div>
+                        <button
+                          onClick={async () => {
+                            if (confirm('Xóa tài liệu này?')) {
+                              await supabase.from('study_documents').delete().eq('id', d.id);
+                              fetchAllData();
+                            }
+                          }}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
-            </form>
-
-            <div className="bg-white rounded-xl shadow-sm border divide-y">
-              {studyTopics.map(t => (
-                <div key={t.id} className="p-4 flex justify-between items-center">
-                  <div>
-                    <h4 className="font-bold">{t.title}</h4>
-                    <p className="text-xs text-gray-500">{t.questions?.length || 0} câu hỏi • {t.description}</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => { setEditingTopicId(t.id); setTopicTitle(t.title); setTopicDesc(t.description || ''); setTopicQuestions(t.questions || []); }} className="p-2 text-blue-600"><Edit3 size={18} /></button>
-                    <button onClick={async () => { if (confirm('Xóa chuyên đề này?')) { await supabase.from('study_topics').delete().eq('id', t.id); fetchAllData(); } }} className="p-2 text-red-600"><Trash2 size={18} /></button>
-                  </div>
-                </div>
-              ))}
-            </div>
+            )}
           </div>
         )}
 
@@ -1185,6 +1499,191 @@ export default function AdminPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 6: THỐNG KÊ HOẠT ĐỘNG THEO THÁNG, BIỂU ĐỒ & XUẤT BÁO CÁO */}
+        {activeTab === 'stats' && (
+          <div className="space-y-6">
+            {/* Thanh công cụ lọc năm & Xuất báo cáo */}
+            <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-wrap justify-between items-center gap-4 print:hidden">
+              <div className="flex items-center gap-3">
+                <span className="font-bold text-sm text-emerald-900">Năm thống kê:</span>
+                <select
+                  value={statsYear}
+                  onChange={(e) => setStatsYear(Number(e.target.value))}
+                  className="border rounded-lg px-3 py-1.5 text-sm font-semibold bg-stone-50"
+                >
+                  {[2025, 2026, 2027].map(y => (
+                    <option key={y} value={y}>Năm {y}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={fetchAllData}
+                  className="bg-stone-100 hover:bg-stone-200 px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1"
+                >
+                  <RefreshCw size={14} /> Làm mới số liệu
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={exportAnnualStatsExcel}
+                  className="bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold flex items-center gap-1.5"
+                >
+                  <Download size={16} /> Xuất Báo cáo Excel (.xlsx)
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-lg text-xs md:text-sm font-semibold flex items-center gap-1.5"
+                >
+                  <Printer size={16} /> In Báo cáo Tổng hợp A4
+                </button>
+              </div>
+            </div>
+
+            {/* Tiêu đề hành chính khi bấm In Báo cáo A4 */}
+            <div className="hidden print:block text-center mb-6">
+              <p className="text-xs uppercase font-semibold">SỞ NÔNG NGHIỆP VÀ MÔI TRƯỜNG TỈNH CAO BẰNG</p>
+              <p className="text-sm uppercase font-bold">TRUNG TÂM KHUYẾN NÔNG VÀ GIỐNG NÔNG LÂM NGHIỆP</p>
+              <h2 className="text-lg font-bold mt-4 uppercase">BÁO CÁO TỔNG HỢP TÌNH HÌNH HOẠT ĐỘNG CỔNG THÔNG TIN KHUYẾN NÔNG NĂM {statsYear}</h2>
+            </div>
+
+            {/* 4 Thẻ chỉ số tổng hợp toàn hệ thống */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-white p-5 rounded-xl border shadow-sm">
+                <p className="text-xs text-gray-500 font-semibold">Tổng lượt truy cập Cổng</p>
+                <p className="text-2xl md:text-3xl font-bold text-emerald-800 mt-1">{totalSiteVisits.toLocaleString('vi-VN')}</p>
+                <p className="text-[11px] text-gray-400 mt-1">Cộng dồn thực tế trên Supabase</p>
+              </div>
+              <div className="bg-white p-5 rounded-xl border shadow-sm">
+                <p className="text-xs text-gray-500 font-semibold">Tổng lượt xem Bài viết</p>
+                <p className="text-2xl md:text-3xl font-bold text-blue-700 mt-1">{totalAllPostViews.toLocaleString('vi-VN')}</p>
+                <p className="text-[11px] text-gray-400 mt-1">Trên {posts.length} bài tin & kỹ thuật</p>
+              </div>
+              <div className="bg-white p-5 rounded-xl border shadow-sm">
+                <p className="text-xs text-gray-500 font-semibold">Lượt Ôn tập & Đọc tài liệu</p>
+                <p className="text-2xl md:text-3xl font-bold text-amber-600 mt-1">{(totalAllDocViews + totalAllStudyQuiz).toLocaleString('vi-VN')}</p>
+                <p className="text-[11px] text-gray-400 mt-1">{totalAllDocViews} lượt đọc file • {totalAllStudyQuiz} lượt thi thử</p>
+              </div>
+              <div className="bg-white p-5 rounded-xl border shadow-sm">
+                <p className="text-xs text-gray-500 font-semibold">Lượt Dự thi & Khảo sát</p>
+                <p className="text-2xl md:text-3xl font-bold text-purple-700 mt-1">{(compEntries.length + surveyResponses.length).toLocaleString('vi-VN')}</p>
+                <p className="text-[11px] text-gray-400 mt-1">{compEntries.length} bài thi • {surveyResponses.length} phiếu khảo sát</p>
+              </div>
+            </div>
+
+            {/* Biểu đồ cột 12 tháng trực quan */}
+            <div className="bg-white p-6 rounded-xl border shadow-sm space-y-4">
+              <div className="flex flex-wrap justify-between items-center gap-3">
+                <div>
+                  <h3 className="font-bold text-base text-emerald-950">Biểu đồ Tương tác theo 12 Tháng (Năm {statsYear})</h3>
+                  <p className="text-xs text-gray-500">Theo dõi biến động mức độ tiếp cận của bà con nông dân qua từng tháng</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5 print:hidden">
+                  {[
+                    { id: 'all', label: 'Tất cả tương tác' },
+                    { id: 'visit', label: 'Lượt truy cập' },
+                    { id: 'post_view', label: 'Xem bài viết' },
+                    { id: 'study', label: 'Học tập & Tài liệu' },
+                    { id: 'comp', label: 'Thi & Khảo sát' }
+                  ].map(btn => (
+                    <button
+                      key={btn.id}
+                      onClick={() => setChartMetric(btn.id)}
+                      className={`px-3 py-1 rounded-full text-xs font-semibold border ${
+                        chartMetric === btn.id
+                          ? 'bg-emerald-800 text-white border-emerald-800'
+                          : 'bg-stone-50 text-gray-700 hover:bg-emerald-50'
+                      }`}
+                    >
+                      {btn.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-6 pb-2 px-2 bg-stone-50 rounded-xl border">
+                <div className="h-56 flex items-end justify-between gap-2 md:gap-4 px-2">
+                  {monthlyStats.map(m => {
+                    const val = getChartValue(m);
+                    const heightPct = Math.max(Math.round((val / maxChartVal) * 100), val > 0 ? 6 : 2);
+                    return (
+                      <div key={m.month} className="flex-1 flex flex-col items-center h-full justify-end group">
+                        <span className="text-[11px] font-bold text-emerald-900 mb-1">{val}</span>
+                        <div
+                          style={{ height: `${heightPct}%` }}
+                          className={`w-full max-w-[38px] rounded-t-lg transition-all duration-300 ${
+                            val > 0 ? 'bg-gradient-to-t from-emerald-700 to-emerald-500 group-hover:from-amber-600 group-hover:to-amber-400' : 'bg-gray-200'
+                          }`}
+                          title={`Tháng ${m.month}/${statsYear}: ${val} lượt`}
+                        />
+                        <span className="text-[11px] font-semibold text-gray-600 mt-2">T{m.month}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Bảng số liệu chi tiết từng tháng */}
+            <div className="bg-white rounded-xl border shadow-sm overflow-x-auto">
+              <div className="p-4 border-b">
+                <h3 className="font-bold text-base text-emerald-950">Bảng Tổng hợp Số liệu Chi tiết theo Tháng (Năm {statsYear})</h3>
+              </div>
+              <table className="w-full text-xs md:text-sm text-left border-collapse">
+                <thead className="bg-emerald-50 text-emerald-950 font-bold">
+                  <tr>
+                    <th className="p-3 border">Tháng</th>
+                    <th className="p-3 border text-center">Truy cập Cổng</th>
+                    <th className="p-3 border text-center">Xem Bài viết</th>
+                    <th className="p-3 border text-center">Đọc Tài liệu/Video</th>
+                    <th className="p-3 border text-center">Ôn tập Trắc nghiệm</th>
+                    <th className="p-3 border text-center">Bài dự Thi</th>
+                    <th className="p-3 border text-center">Phiếu Khảo sát</th>
+                    <th className="p-3 border text-center">Hỏi đáp gửi về</th>
+                    <th className="p-3 border text-center bg-emerald-100">Tổng cộng</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {monthlyStats.map(m => (
+                    <tr key={m.month} className="hover:bg-stone-50">
+                      <td className="p-2.5 border font-semibold">Tháng {m.month}/{statsYear}</td>
+                      <td className="p-2.5 border text-center">{m.visits}</td>
+                      <td className="p-2.5 border text-center">{m.postViews}</td>
+                      <td className="p-2.5 border text-center">{m.docViews}</td>
+                      <td className="p-2.5 border text-center">{m.studyCompletes}</td>
+                      <td className="p-2.5 border text-center">{m.compSubmits}</td>
+                      <td className="p-2.5 border text-center">{m.surveySubmits}</td>
+                      <td className="p-2.5 border text-center">{m.qaCount}</td>
+                      <td className="p-2.5 border text-center font-bold text-emerald-800 bg-emerald-50/40">{m.total}</td>
+                    </tr>
+                  ))}
+                  <tr className="bg-amber-50 font-bold text-emerald-950">
+                    <td className="p-3 border">TỔNG NĂM {statsYear}</td>
+                    <td className="p-3 border text-center">{monthlyStats.reduce((a, b) => a + b.visits, 0)}</td>
+                    <td className="p-3 border text-center">{monthlyStats.reduce((a, b) => a + b.postViews, 0)}</td>
+                    <td className="p-3 border text-center">{monthlyStats.reduce((a, b) => a + b.docViews, 0)}</td>
+                    <td className="p-3 border text-center">{monthlyStats.reduce((a, b) => a + b.studyCompletes, 0)}</td>
+                    <td className="p-3 border text-center">{monthlyStats.reduce((a, b) => a + b.compSubmits, 0)}</td>
+                    <td className="p-3 border text-center">{monthlyStats.reduce((a, b) => a + b.surveySubmits, 0)}</td>
+                    <td className="p-3 border text-center">{monthlyStats.reduce((a, b) => a + b.qaCount, 0)}</td>
+                    <td className="p-3 border text-center text-red-700">{monthlyStats.reduce((a, b) => a + b.total, 0)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="hidden print:grid grid-cols-2 text-center mt-10 text-sm">
+              <div>
+                <p className="font-bold">NGƯỜI LẬP BÁO CÁO</p>
+                <p className="text-xs italic text-gray-500 mt-1">(Ký, ghi rõ họ tên)</p>
+              </div>
+              <div>
+                <p className="font-bold">LÃNH ĐẠO TRUNG TÂM</p>
+                <p className="text-xs italic text-gray-500 mt-1">(Ký tên, đóng dấu)</p>
+              </div>
             </div>
           </div>
         )}
