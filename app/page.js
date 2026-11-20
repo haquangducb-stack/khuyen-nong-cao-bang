@@ -6,7 +6,8 @@ import { QRCodeCanvas } from 'qrcode.react';
 import {
   Newspaper, BookOpen, Trophy, ClipboardList, MessageSquare,
   Volume2, VolumeX, Eye, Clock, CheckCircle,
-  QrCode, Send, Lock, ArrowRight, RotateCcw, Award
+  QrCode, Send, Lock, ArrowRight, RotateCcw, Award,
+  FileText, PlayCircle, Download, X, Presentation
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -17,6 +18,27 @@ const parsePrizes = (prizeStr) => {
     if (Array.isArray(parsed)) return parsed;
   } catch {}
   return [{ rank: 'Giải thưởng', quantity: '01', value: prizeStr }];
+};
+
+// Chuyển đổi link YouTube thường sang link nhúng iframe
+const getYoutubeEmbedUrl = (url) => {
+  if (!url) return '';
+  const regExp = /(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+  const match = url.match(regExp);
+  return match ? `https://www.youtube.com/embed/${match[1]}` : url;
+};
+
+// Tạo link xem trực tiếp trên trình duyệt cho Word, PPT, PDF không cần tải về
+const getDirectViewerUrl = (doc) => {
+  const type = (doc.file_type || '').toLowerCase();
+  const encodedUrl = encodeURIComponent(doc.file_url);
+  if (['doc', 'docx', 'ppt', 'pptx'].includes(type)) {
+    return `https://view.officeapps.live.com/op/embed.aspx?src=${encodedUrl}`;
+  }
+  if (type === 'pdf') {
+    return `https://docs.google.com/gview?url=${encodedUrl}&embedded=true`;
+  }
+  return doc.file_url;
 };
 
 export default function HomePage() {
@@ -31,10 +53,17 @@ export default function HomePage() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const audioRef = React.useRef(null);
 
+  // Tab Nông dân học tập (2 tab nhỏ bên trong)
+  const [studySubTab, setStudySubTab] = useState('quiz'); // 'quiz' | 'docs'
   const [studyTopics, setStudyTopics] = useState([]);
   const [activeTopic, setActiveTopic] = useState(null);
   const [studyAnswers, setStudyAnswers] = useState({});
   const [studySubmitted, setStudySubmitted] = useState(false);
+
+  // Thư viện tài liệu Word, PDF, PPT & Video bài giảng
+  const [studyDocs, setStudyDocs] = useState([]);
+  const [docFilter, setDocFilter] = useState('Tất cả');
+  const [viewingDoc, setViewingDoc] = useState(null);
 
   const [competitions, setCompetitions] = useState([]);
   const [activeComp, setActiveComp] = useState(null);
@@ -71,13 +100,20 @@ export default function HomePage() {
     'Giới thiệu sản phẩm': ['Giới thiệu sản phẩm']
   };
 
+  const logActivity = async (action_type, ref_id = null, ref_title = null) => {
+    try {
+      await supabase.from('activity_logs').insert([{ action_type, ref_id, ref_title }]);
+    } catch {}
+  };
+
   useEffect(() => {
     fetchPublicData();
     const timer = setInterval(() => setNow(new Date()), 1000);
 
-    // Đếm lượt truy cập thực tế cộng dồn trên Supabase
+    // Đếm lượt truy cập thực tế cộng dồn trên Supabase + ghi nhật ký theo tháng
     const updateRealVisits = async () => {
       try {
+        logActivity('visit');
         const { data } = await supabase
           .from('site_stats')
           .select('visits')
@@ -105,15 +141,17 @@ export default function HomePage() {
   }, []);
 
   const fetchPublicData = async () => {
-    const [p, st, c, sv, qa] = await Promise.all([
+    const [p, st, docs, c, sv, qa] = await Promise.all([
       supabase.from('posts').select('*').order('created_at', { ascending: false }),
       supabase.from('study_topics').select('*').order('created_at', { ascending: false }),
+      supabase.from('study_documents').select('*').order('created_at', { ascending: false }),
       supabase.from('competitions').select('*').order('created_at', { ascending: false }),
       supabase.from('surveys').select('*').order('created_at', { ascending: false }),
       supabase.from('qa_questions').select('*').eq('is_published', true).order('created_at', { ascending: false }),
     ]);
     if (p.data) setPosts(p.data);
     if (st.data) setStudyTopics(st.data);
+    if (docs.data) setStudyDocs(docs.data);
     if (c.data) setCompetitions(c.data);
     if (sv.data) setSurveys(sv.data);
     if (qa.data) setQaList(qa.data);
@@ -125,7 +163,23 @@ export default function HomePage() {
     const nextViews = (post.views || 0) + 1;
     setPosts(posts.map(item => item.id === post.id ? { ...item, views: nextViews } : item));
     await supabase.from('posts').update({ views: nextViews }).eq('id', post.id);
+    logActivity('post_view', String(post.id), post.title);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleOpenDocument = async (doc) => {
+    setViewingDoc(doc);
+    const nextViews = (doc.views || 0) + 1;
+    setStudyDocs(studyDocs.map(d => d.id === doc.id ? { ...d, views: nextViews } : d));
+    await supabase.from('study_documents').update({ views: nextViews }).eq('id', doc.id);
+    logActivity('doc_view', String(doc.id), doc.title);
+  };
+
+  const handleCompleteStudyQuiz = () => {
+    setStudySubmitted(true);
+    if (activeTopic) {
+      logActivity('study_complete', String(activeTopic.id), activeTopic.title);
+    }
   };
 
   const stopAllSpeech = () => {
@@ -140,7 +194,6 @@ export default function HomePage() {
     setIsSpeaking(false);
   };
 
-  // Đọc nguyên văn toàn bộ bài viết từ đầu đến cuối qua proxy /api/tts
   const handleToggleSpeech = (post) => {
     if (isSpeaking) {
       stopAllSpeech();
@@ -154,7 +207,6 @@ export default function HomePage() {
 
     if (!plainText) return;
 
-    // Chia nhỏ thành từng đoạn <= 170 ký tự (kể cả câu quá dài không có dấu chấm)
     const rawSentences = plainText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [plainText];
     const mergedChunks = [];
     let current = '';
@@ -343,38 +395,54 @@ export default function HomePage() {
   };
 
   const handleAiDraftQa = async () => {
-  if (!qaForm.question.trim()) {
-    alert('Bà con hãy gõ vài từ khóa ngắn gọn (ví dụ: "lúa bị vàng lá", "lợn con tiêu chảy") vào ô nội dung trước rồi bấm nút AI soạn giúp!');
-    return;
-  }
-  setDraftingQa(true);
-  try {
-    const res = await fetch('/api/draft-qa', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        rawText: qaForm.question,
-        commune: qaForm.commune,
-      }),
-    });
-    const data = await res.json();
-    if (data.draftedQuestion) {
-      setQaForm({ ...qaForm, question: data.draftedQuestion });
-    } else {
-      alert('Không thể soạn tự động: ' + (data.error || 'Vui lòng thử lại'));
+    if (!qaForm.question.trim()) {
+      alert('Bà con hãy gõ vài từ khóa ngắn gọn (ví dụ: "lúa bị vàng lá", "lợn con tiêu chảy") vào ô nội dung trước rồi bấm nút AI soạn giúp!');
+      return;
     }
-  } catch (err) {
-    alert('Lỗi kết nối trợ lý AI.');
-  } finally {
-    setDraftingQa(false);
-  }
-};
+    setDraftingQa(true);
+    try {
+      const res = await fetch('/api/draft-qa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rawText: qaForm.question,
+          commune: qaForm.commune,
+        }),
+      });
+      const data = await res.json();
+      if (data.draftedQuestion) {
+        setQaForm({ ...qaForm, question: data.draftedQuestion });
+      } else {
+        alert('Không thể soạn tự động: ' + (data.error || 'Vui lòng thử lại'));
+      }
+    } catch (err) {
+      alert('Lỗi kết nối trợ lý AI.');
+    } finally {
+      setDraftingQa(false);
+    }
+  };
 
   const filteredPosts = posts.filter(p => {
     if (selectedGroup === 'Tất cả') return true;
     if (selectedCategory !== 'Tất cả') return p.category === selectedCategory;
     return (categoryTree[selectedGroup] || []).includes(p.category);
   });
+
+  const filteredDocs = studyDocs.filter(d => docFilter === 'Tất cả' || d.category === docFilter);
+
+  const renderDocBadge = (type) => {
+    const t = (type || '').toLowerCase();
+    if (t === 'youtube' || t === 'video') {
+      return <span className="bg-red-100 text-red-700 text-[11px] font-bold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1"><PlayCircle size={12} /> Video bài giảng</span>;
+    }
+    if (t === 'ppt' || t === 'pptx') {
+      return <span className="bg-orange-100 text-orange-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1"><Presentation size={12} /> Bài giảng PPT</span>;
+    }
+    if (t === 'pdf') {
+      return <span className="bg-rose-100 text-rose-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1"><FileText size={12} /> Tài liệu PDF</span>;
+    }
+    return <span className="bg-blue-100 text-blue-800 text-[11px] font-bold px-2.5 py-0.5 rounded-full inline-flex items-center gap-1"><FileText size={12} /> Tài liệu Word</span>;
+  };
 
   return (
     <div className="min-h-screen bg-stone-50 text-gray-800 flex flex-col" style={{ fontSize: `${fontSize}px` }}>
@@ -565,110 +633,198 @@ export default function HomePage() {
         )}
 
         {activeTab === 'study' && (
-          <div>
-            {activeTopic ? (
-              <div className="bg-white rounded-2xl border shadow-sm p-6 max-w-3xl mx-auto space-y-6">
-                <div className="flex justify-between items-center border-b pb-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-emerald-900">{activeTopic.title}</h2>
-                    <p className="text-xs text-gray-500">{activeTopic.description}</p>
-                  </div>
-                  <button onClick={() => setActiveTopic(null)} className="text-xs text-emerald-700 font-semibold">
-                    ← Chọn chuyên đề khác
-                  </button>
-                </div>
+          <div className="space-y-5">
+            <div className="bg-emerald-900 text-white p-6 rounded-2xl">
+              <h2 className="text-xl font-bold">Chuyên mục Nông dân Học tập</h2>
+              <p className="text-sm text-emerald-100 mt-1">
+                Xem trực tiếp giáo trình Word, PDF, slide bài giảng PowerPoint, video hướng dẫn thực hành và tự ôn luyện trắc nghiệm.
+              </p>
 
-                {(activeTopic.questions || []).map((q, idx) => (
-                  <div key={idx} className="p-4 bg-stone-50 rounded-xl border space-y-2.5">
-                    <p className="font-bold text-gray-900">Câu {idx + 1}: {q.q}</p>
-                    <div className="space-y-2">
-                      {q.options.map((opt, oIdx) => {
-                        const chosen = studyAnswers[idx] === oIdx;
-                        let style = 'bg-white border-gray-200';
-                        if (studySubmitted) {
-                          if (oIdx === q.answer) style = 'bg-emerald-100 border-emerald-600 font-semibold text-emerald-900';
-                          else if (chosen) style = 'bg-red-100 border-red-500 text-red-900';
-                        } else if (chosen) {
-                          style = 'bg-emerald-50 border-emerald-600';
-                        }
-                        return (
-                          <button
-                            key={oIdx}
-                            disabled={studySubmitted}
-                            onClick={() => setStudyAnswers({ ...studyAnswers, [idx]: oIdx })}
-                            className={`w-full text-left p-3 rounded-lg border text-sm transition ${style}`}
-                          >
-                            {opt}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {studySubmitted && q.explain && (
-                      <div className="text-xs bg-amber-50 text-amber-900 p-3 rounded-lg border border-amber-200">
-                        <strong>Giải thích kỹ thuật:</strong> {q.explain}
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {!studySubmitted ? (
-                  <button
-                    onClick={() => setStudySubmitted(true)}
-                    className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-bold py-3 rounded-xl"
-                  >
-                    Chấm điểm & Xem giải thích kỹ thuật
-                  </button>
-                ) : (
-                  <div className="bg-emerald-50 border border-emerald-300 p-5 rounded-xl text-center space-y-3">
-                    <p className="text-lg font-bold text-emerald-900">
-                      Kết quả: Đúng{' '}
-                      {(activeTopic.questions || []).filter((q, idx) => studyAnswers[idx] === q.answer).length}/
-                      {(activeTopic.questions || []).length} câu
-                    </p>
-                    <div className="flex flex-wrap justify-center gap-3">
-                      <button
-                        onClick={() => { setStudyAnswers({}); setStudySubmitted(false); }}
-                        className="bg-white border px-4 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-1"
-                      >
-                        <RotateCcw size={15} /> Làm lại chuyên đề này
-                      </button>
-                      <button
-                        onClick={() => { setActiveTopic(null); setStudyAnswers({}); setStudySubmitted(false); }}
-                        className="bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-1"
-                      >
-                        Thi tiếp bộ câu hỏi khác <ArrowRight size={15} />
-                      </button>
-                    </div>
-                  </div>
-                )}
+              {/* 2 Tab nhỏ bên trong Nông dân học tập */}
+              <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-emerald-700/70">
+                <button
+                  onClick={() => { setStudySubTab('quiz'); setActiveTopic(null); }}
+                  className={`px-4 py-2 rounded-xl text-xs md:text-sm font-bold flex items-center gap-2 transition ${
+                    studySubTab === 'quiz'
+                      ? 'bg-amber-400 text-emerald-950 shadow'
+                      : 'bg-emerald-800/80 text-emerald-100 hover:bg-emerald-700'
+                  }`}
+                >
+                  <BookOpen size={16} /> Ôn tập trắc nghiệm ({studyTopics.length})
+                </button>
+                <button
+                  onClick={() => { setStudySubTab('docs'); setActiveTopic(null); }}
+                  className={`px-4 py-2 rounded-xl text-xs md:text-sm font-bold flex items-center gap-2 transition ${
+                    studySubTab === 'docs'
+                      ? 'bg-amber-400 text-emerald-950 shadow'
+                      : 'bg-emerald-800/80 text-emerald-100 hover:bg-emerald-700'
+                  }`}
+                >
+                  <FileText size={16} /> Tài liệu & Video bài giảng ({studyDocs.length})
+                </button>
               </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-emerald-900 text-white p-6 rounded-2xl">
-                  <h2 className="text-xl font-bold">Chuyên mục Nông dân Học tập</h2>
-                  <p className="text-sm text-emerald-100 mt-1">
-                    Chọn một chuyên đề kỹ thuật dưới đây để tự ôn luyện kiến thức trồng trọt, chăn nuôi, thủy sản.
-                  </p>
+            </div>
+
+            {studySubTab === 'quiz' ? (
+              activeTopic ? (
+                <div className="bg-white rounded-2xl border shadow-sm p-6 max-w-3xl mx-auto space-y-6">
+                  <div className="flex justify-between items-center border-b pb-4">
+                    <div>
+                      <h2 className="text-xl font-bold text-emerald-900">{activeTopic.title}</h2>
+                      <p className="text-xs text-gray-500">{activeTopic.description}</p>
+                    </div>
+                    <button onClick={() => setActiveTopic(null)} className="text-xs text-emerald-700 font-semibold">
+                      ← Chọn chuyên đề khác
+                    </button>
+                  </div>
+
+                  {(activeTopic.questions || []).map((q, idx) => (
+                    <div key={idx} className="p-4 bg-stone-50 rounded-xl border space-y-2.5">
+                      <p className="font-bold text-gray-900">Câu {idx + 1}: {q.q}</p>
+                      <div className="space-y-2">
+                        {q.options.map((opt, oIdx) => {
+                          const chosen = studyAnswers[idx] === oIdx;
+                          let style = 'bg-white border-gray-200';
+                          if (studySubmitted) {
+                            if (oIdx === q.answer) style = 'bg-emerald-100 border-emerald-600 font-semibold text-emerald-900';
+                            else if (chosen) style = 'bg-red-100 border-red-500 text-red-900';
+                          } else if (chosen) {
+                            style = 'bg-emerald-50 border-emerald-600';
+                          }
+                          return (
+                            <button
+                              key={oIdx}
+                              disabled={studySubmitted}
+                              onClick={() => setStudyAnswers({ ...studyAnswers, [idx]: oIdx })}
+                              className={`w-full text-left p-3 rounded-lg border text-sm transition ${style}`}
+                            >
+                              {opt}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {studySubmitted && q.explain && (
+                        <div className="text-xs bg-amber-50 text-amber-900 p-3 rounded-lg border border-amber-200">
+                          <strong>Giải thích kỹ thuật:</strong> {q.explain}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {!studySubmitted ? (
+                    <button
+                      onClick={handleCompleteStudyQuiz}
+                      className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-bold py-3 rounded-xl"
+                    >
+                      Chấm điểm & Xem giải thích kỹ thuật
+                    </button>
+                  ) : (
+                    <div className="bg-emerald-50 border border-emerald-300 p-5 rounded-xl text-center space-y-3">
+                      <p className="text-lg font-bold text-emerald-900">
+                        Kết quả: Đúng{' '}
+                        {(activeTopic.questions || []).filter((q, idx) => studyAnswers[idx] === q.answer).length}/
+                        {(activeTopic.questions || []).length} câu
+                      </p>
+                      <div className="flex flex-wrap justify-center gap-3">
+                        <button
+                          onClick={() => { setStudyAnswers({}); setStudySubmitted(false); }}
+                          className="bg-white border px-4 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-1"
+                        >
+                          <RotateCcw size={15} /> Làm lại chuyên đề này
+                        </button>
+                        <button
+                          onClick={() => { setActiveTopic(null); setStudyAnswers({}); setStudySubmitted(false); }}
+                          className="bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-1"
+                        >
+                          Thi tiếp bộ câu hỏi khác <ArrowRight size={15} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                {studyTopics.length === 0 ? (
-                  <div className="bg-white p-8 rounded-xl border text-center text-gray-500">Chưa có bộ chuyên đề học tập nào.</div>
+              ) : studyTopics.length === 0 ? (
+                <div className="bg-white p-8 rounded-xl border text-center text-gray-500">Chưa có bộ chuyên đề học tập nào.</div>
+              ) : (
+                <div className="grid md:grid-cols-2 gap-4">
+                  {studyTopics.map(topic => (
+                    <div key={topic.id} className="bg-white p-5 rounded-xl border shadow-sm flex flex-col justify-between">
+                      <div>
+                        <span className="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-semibold">
+                          {topic.questions?.length || 0} câu hỏi trắc nghiệm
+                        </span>
+                        <h3 className="font-bold text-lg mt-2">{topic.title}</h3>
+                        <p className="text-xs text-gray-600 mt-1">{topic.description}</p>
+                      </div>
+                      <button
+                        onClick={() => { setActiveTopic(topic); setStudyAnswers({}); setStudySubmitted(false); }}
+                        className="mt-4 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold py-2.5 rounded-lg"
+                      >
+                        Bắt đầu ôn tập chuyên đề →
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : (
+              /* Tab con 2: Thư viện Tài liệu (Word, PDF, PPT) & Video bài giảng xem trực tiếp */
+              <div className="space-y-4">
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {['Tất cả', 'Chăn nuôi - Thú y', 'Trồng trọt - Lâm nghiệp', 'Thủy sản', 'Video thực hành'].map(cat => (
+                    <button
+                      key={cat}
+                      onClick={() => setDocFilter(cat)}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap border ${
+                        docFilter === cat
+                          ? 'bg-emerald-800 text-white border-emerald-800'
+                          : 'bg-white text-gray-700 hover:bg-emerald-50'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+
+                {filteredDocs.length === 0 ? (
+                  <div className="bg-white p-8 rounded-xl border text-center text-gray-500">
+                    Chưa có tài liệu hoặc video bài giảng nào trong mục này.
+                  </div>
                 ) : (
                   <div className="grid md:grid-cols-2 gap-4">
-                    {studyTopics.map(topic => (
-                      <div key={topic.id} className="bg-white p-5 rounded-xl border shadow-sm flex flex-col justify-between">
+                    {filteredDocs.map(doc => (
+                      <div key={doc.id} className="bg-white p-5 rounded-xl border shadow-sm flex flex-col justify-between space-y-3">
                         <div>
-                          <span className="text-xs bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full font-semibold">
-                            {topic.questions?.length || 0} câu hỏi trắc nghiệm
-                          </span>
-                          <h3 className="font-bold text-lg mt-2">{topic.title}</h3>
-                          <p className="text-xs text-gray-600 mt-1">{topic.description}</p>
+                          <div className="flex justify-between items-center gap-2">
+                            {renderDocBadge(doc.file_type)}
+                            <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                              <Eye size={13} /> {doc.views || 0} lượt xem
+                            </span>
+                          </div>
+                          <h3 className="font-bold text-base text-gray-900 mt-2">{doc.title}</h3>
+                          {doc.description && <p className="text-xs text-gray-600 mt-1">{doc.description}</p>}
+                          <p className="text-[11px] text-emerald-700 font-semibold mt-1.5">Lĩnh vực: {doc.category}</p>
                         </div>
-                        <button
-                          onClick={() => { setActiveTopic(topic); setStudyAnswers({}); setStudySubmitted(false); }}
-                          className="mt-4 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold py-2.5 rounded-lg"
-                        >
-                          Bắt đầu ôn tập chuyên đề →
-                        </button>
+
+                        <div className="pt-3 border-t flex gap-2">
+                          <button
+                            onClick={() => handleOpenDocument(doc)}
+                            className="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white text-xs md:text-sm font-semibold py-2.5 px-3 rounded-lg flex items-center justify-center gap-1.5"
+                          >
+                            {['youtube', 'video'].includes((doc.file_type || '').toLowerCase())
+                              ? <><PlayCircle size={16} /> Xem video bài giảng</>
+                              : <><Eye size={16} /> Đọc trực tiếp trên máy</>}
+                          </button>
+                          {!['youtube'].includes((doc.file_type || '').toLowerCase()) && (
+                            <a
+                              href={doc.file_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="bg-stone-100 hover:bg-stone-200 text-gray-700 text-xs font-semibold px-3 py-2.5 rounded-lg inline-flex items-center gap-1"
+                              title="Tải tệp về máy"
+                            >
+                              <Download size={15} />
+                            </a>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -983,23 +1139,23 @@ export default function HomePage() {
               <input required value={qaForm.asker_name} onChange={(e) => setQaForm({ ...qaForm, asker_name: e.target.value })} placeholder="Họ và tên của bạn" className="w-full border rounded-lg px-3 py-2 text-sm" />
               <input required value={qaForm.commune} onChange={(e) => setQaForm({ ...qaForm, commune: e.target.value })} placeholder="Xã / Phường" className="w-full border rounded-lg px-3 py-2 text-sm" />
               <div className="space-y-1.5">
-  <textarea
-    required
-    rows={4}
-    value={qaForm.question}
-    onChange={(e) => setQaForm({ ...qaForm, question: e.target.value })}
-    placeholder="Gõ ngắn gọn vấn đề (VD: ngô bị sâu đục thân) rồi bấm nút AI bên dưới để viết thành câu hỏi đầy đủ..."
-    className="w-full border rounded-lg px-3 py-2 text-sm"
-  />
-  <button
-    type="button"
-    onClick={handleAiDraftQa}
-    disabled={draftingQa}
-    className="w-full bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition"
-  >
-    {draftingQa ? '⏳ AI (Gemini 3.8) đang viết giúp câu hỏi...' : '✨ Nhờ AI viết thành câu hỏi kỹ thuật rõ ràng'}
-  </button>
-</div>
+                <textarea
+                  required
+                  rows={4}
+                  value={qaForm.question}
+                  onChange={(e) => setQaForm({ ...qaForm, question: e.target.value })}
+                  placeholder="Gõ ngắn gọn vấn đề (VD: ngô bị sâu đục thân) rồi bấm nút AI bên dưới để viết thành câu hỏi đầy đủ..."
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={handleAiDraftQa}
+                  disabled={draftingQa}
+                  className="w-full bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-semibold py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 transition"
+                >
+                  {draftingQa ? '⏳ AI (Gemini 3.8) đang viết giúp câu hỏi...' : '✨ Nhờ AI viết thành câu hỏi kỹ thuật rõ ràng'}
+                </button>
+              </div>
               <button type="submit" className="w-full bg-emerald-700 hover:bg-emerald-800 text-white font-semibold py-2.5 rounded-lg text-sm flex items-center justify-center gap-1.5">
                 <Send size={15} /> Gửi câu hỏi tư vấn
               </button>
@@ -1031,6 +1187,64 @@ export default function HomePage() {
           </div>
         )}
       </main>
+
+      {/* Cửa sổ xem trực tiếp Word, PDF, PowerPoint và Video bài giảng ngay trên trình duyệt */}
+      {viewingDoc && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-2 md:p-6 z-50" onClick={() => setViewingDoc(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-5xl h-[88vh] flex flex-col overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 bg-emerald-900 text-white flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="font-bold text-sm md:text-base truncate">{viewingDoc.title}</h3>
+                <p className="text-[11px] text-emerald-200">{viewingDoc.category}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {!['youtube'].includes((viewingDoc.file_type || '').toLowerCase()) && (
+                  <a
+                    href={viewingDoc.file_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="bg-emerald-700 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-lg font-semibold inline-flex items-center gap-1"
+                  >
+                    <Download size={14} /> Tải về
+                  </a>
+                )}
+                <button
+                  onClick={() => setViewingDoc(null)}
+                  className="bg-red-600 hover:bg-red-700 text-white p-1.5 rounded-lg"
+                  title="Đóng"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 bg-stone-900 flex items-center justify-center overflow-hidden">
+              {(viewingDoc.file_type || '').toLowerCase() === 'youtube' ? (
+                <iframe
+                  src={getYoutubeEmbedUrl(viewingDoc.file_url)}
+                  className="w-full h-full border-0"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  title={viewingDoc.title}
+                />
+              ) : (viewingDoc.file_type || '').toLowerCase() === 'video' ? (
+                <video
+                  src={viewingDoc.file_url}
+                  controls
+                  autoPlay
+                  className="max-w-full max-h-full"
+                />
+              ) : (
+                <iframe
+                  src={getDirectViewerUrl(viewingDoc)}
+                  className="w-full h-full bg-white border-0"
+                  title={viewingDoc.title}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {qrModalTitle && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={() => setQrModalTitle('')}>
